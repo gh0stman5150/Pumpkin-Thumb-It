@@ -6,9 +6,9 @@ Decisions below are inferred from the code and git history. Where the repo does 
 
 The GUI is a single script with OpenCV, NumPy and Tkinter; the Linux CLI is a separate Pillow-and-FFmpeg package. This lets the CLI run over SSH and in cron with one Python dependency, at the cost of duplicated layout constants that must be edited in both places.
 
-## Keeping v5 next to 5.2
+## v5 removed
 
-The README says v5 is kept for its orange theme and old UI. It is no longer maintained: its in-place self-rewriting logo save (below) and other pre-5.2 behaviour remain.
+The older orange-theme script was removed from the repository (it is in git history). It was no longer maintained and still rewrote its own source file when saving logo settings (see below), so keeping it risked users running the less safe version.
 
 ## Logo is blank by default and remembered in a settings file
 

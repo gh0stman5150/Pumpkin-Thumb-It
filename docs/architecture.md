@@ -2,7 +2,7 @@
 
 Pumpkin's Thumb It turns video files into a pack of images in a `scr/` folder next to the videos. Two independent implementations produce the same pack:
 
-- **Windows GUI**: single-file Tkinter scripts at the repo root (`Pumpkin’s Thumb It 5.2.py`, plus the legacy `Pumpkin’s Thumb It v5.py`).
+- **Windows GUI**: a single-file Tkinter script at the repo root (`Pumpkin’s Thumb It 5.2.py`).
 - **Linux CLI**: the `thumb_it` package in `linux/`, installed as the `thumb-it` command.
 
 They share no code. The CLI is a port of the 5.x layout built on Pillow and FFmpeg, with no Tkinter, OpenCV or NumPy.

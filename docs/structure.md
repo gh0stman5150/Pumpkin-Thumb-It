@@ -3,7 +3,6 @@
 ```text
 Pumpkin-Thumb-It/
 ├── Pumpkin’s Thumb It 5.2.py      # current Windows GUI (dark/lime theme)
-├── Pumpkin’s Thumb It v5.py       # legacy Windows GUI (orange theme)
 ├── README.md
 ├── LICENSE
 ├── CLAUDE.md                       # guidance for Claude Code
@@ -32,7 +31,6 @@ Untracked local files such as `ffmpeg.exe`, `ffplay.exe` and `ffprobe.exe` may s
 | Path | Responsibility |
 | --- | --- |
 | `Pumpkin’s Thumb It 5.2.py` | Everything for the GUI: constants, FFmpeg helpers, rendering, UI. Filenames contain a Unicode right quote (`’`), so quote them in shell commands. |
-| `Pumpkin’s Thumb It v5.py` | Kept for users who want the original theme. Its rendering code matches 5.1; it still rewrites itself when saving logo settings and has none of the 5.2 changes. Not maintained alongside 5.2. |
 | `linux/thumb_it/cli.py` | Parsing, validation, `collect` / `group_inputs`, `doctor`, the thread pool and exit codes. No image or FFmpeg work. |
 | `linux/thumb_it/media.py` | Process execution only: timeouts, cancellation, ffprobe parsing. |
 | `linux/thumb_it/render.py` | All drawing and encoding, atomic writes, output validation. Imports `media`, never `cli`. |

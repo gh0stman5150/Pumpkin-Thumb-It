@@ -34,13 +34,13 @@
 
 # Version Notes
 
-**Linux users:** the **5.2 CLI edition** runs in a terminal or over SSH. Start with the [Linux installation and commands](linux/README.md). The CLI needs Python **3.10+**, Pillow, FFmpeg and a system font; it does not need a desktop, Tkinter, OpenCV or NumPy. The original Windows GUI scripts remain available.
+**Linux users:** the **5.2 CLI edition** runs in a terminal or over SSH. Start with the [Linux installation and commands](linux/README.md). The CLI needs Python **3.10+**, Pillow, FFmpeg and a system font; it does not need a desktop, Tkinter, OpenCV or NumPy. The Windows GUI is the single script `Pumpkin’s Thumb It 5.2.py`.
 
-Pumpkin's Thumb It v5 is still included in the Git repository for anyone who wants the original orange theme and old UI.
+The older v5 script (original orange theme) has been removed from the repository; it remains available in the Git history.
 
 Pumpkin's Thumb It 5.2 is the updated version with the new layout, refreshed controls, and dark/lime Pumpkin theme.
 
-Both included versions now generate clean output images without the former orange promotional footer bar.
+Generated images no longer include the former orange promotional footer bar (an optional footer is available, see below).
 
 ---
 
