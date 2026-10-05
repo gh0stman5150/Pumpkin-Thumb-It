@@ -1,5 +1,6 @@
 import os
 import re
+import hashlib
 import cv2
 import json
 import threading
@@ -23,7 +24,7 @@ from tkinterdnd2 import DND_FILES, TkinterDnD
 from tkinter import ttk
 
 APP_NAME = "Pumpkin's Thumb It"
-APP_VERSION = "5.1"
+APP_VERSION = "5.2"
 APP_TITLE = f"{APP_NAME} {APP_VERSION}"
 
 FFPROBE = r"C:\ffmpeg\bin\ffprobe.exe"
@@ -35,7 +36,8 @@ FONT_PATH = "C:/Windows/Fonts/trebucbd.ttf"
 
 SPACING = 10
 BANNER_HEIGHT = 140
-FOOTER_HEIGHT = 0
+FOOTER_HEIGHT = 0  # runtime value: 0 = no footer; set from the GUI footer toggle on Start
+FOOTER_BAR_HEIGHT = 34  # height used while the footer is enabled
 
 SMALL_COLS = 6
 SMALL_W = 237
@@ -100,6 +102,10 @@ CENTERLONGEST_FPS = 12
 MAX_WEBP_BYTES = 5 * 1024 * 1024
 MIN_WEBP_QUALITY = 25
 
+ANIM_FORMAT = "webp"  # animated output format, set from the GUI Animation dropdown on Start: "webp" or "avif"
+AVIF_START_QUALITY = 90
+AVIF_MIN_QUALITY = 20
+
 PROXY_SAFE_MODE = True
 if PROXY_SAFE_MODE:
     PROXY_SAFE_CENTER_W = 960
@@ -126,6 +132,8 @@ SPEED_PROFILES = {
         "JPG_QUALITY": 90,
         "JPG_OPTIMIZE": True,
         "WEBP_QUALITY": 85,
+        "WEBP_METHOD": 6,
+        "AVIF_SPEED": 4,
         "MAX_THREADS": 6,
     },
     "Fast": {
@@ -134,6 +142,8 @@ SPEED_PROFILES = {
         "JPG_QUALITY": 85,
         "JPG_OPTIMIZE": False,
         "WEBP_QUALITY": 75,
+        "WEBP_METHOD": 3,
+        "AVIF_SPEED": 6,
         "MAX_THREADS": max(4, os.cpu_count() or 8),
     },
     "Fastest": {
@@ -142,6 +152,8 @@ SPEED_PROFILES = {
         "JPG_QUALITY": 80,
         "JPG_OPTIMIZE": False,
         "WEBP_QUALITY": 70,
+        "WEBP_METHOD": 1,
+        "AVIF_SPEED": 8,
         "MAX_THREADS": max(4, os.cpu_count() or 8),
     },
 }
@@ -266,6 +278,81 @@ def _load_default_logo():
         LOGO_IMAGE = load_logo()
     finally:
         LOGO_READY.set()
+
+def _stable_seed(video_path):
+    # hash() is salted per process; use a digest so frame choices are reproducible.
+    return int.from_bytes(hashlib.sha256(str(video_path).encode("utf-8", "surrogatepass")).digest()[:4], "big")
+
+def _fit_webp_quality(encode, max_bytes, q_start, q_min):
+    """Binary-search the highest quality in [q_min, q_start] whose encode(q) fits max_bytes.
+
+    Returns the encoded bytes. If even q_min does not fit, returns the q_min result.
+    """
+    q_min = int(q_min)
+    q_start = max(int(q_start), q_min)
+    data = encode(q_start)
+    if len(data) <= max_bytes or q_start <= q_min:
+        return data
+    best = encode(q_min)
+    if len(best) > max_bytes:
+        return best
+    lo, hi = q_min, q_start
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        data = encode(mid)
+        if len(data) <= max_bytes:
+            best, lo = data, mid
+        else:
+            hi = mid
+    return best
+
+def _anim_ext():
+    return ".avif" if ANIM_FORMAT == "avif" else ".webp"
+
+_AVIF_OK = None
+
+def _avif_supported():
+    """True if this Pillow build can write animated AVIF."""
+    global _AVIF_OK
+    if _AVIF_OK is None:
+        try:
+            buf = BytesIO()
+            probe = [Image.new("RGB", (16, 16), c) for c in ("red", "blue")]
+            probe[0].save(buf, format="AVIF", save_all=True, append_images=probe[1:], duration=100, quality=50)
+            with Image.open(BytesIO(buf.getvalue())) as im:
+                _AVIF_OK = getattr(im, "n_frames", 1) == 2
+        except Exception:
+            _AVIF_OK = False
+    return _AVIF_OK
+
+def _encode_animation_bytes(frames, fps, quality, cfg):
+    buf = BytesIO()
+    duration = int(1000 / fps)
+    if ANIM_FORMAT == "avif":
+        frames[0].save(
+            buf, format="AVIF", save_all=True, append_images=frames[1:],
+            duration=duration, quality=int(quality), speed=int(cfg.get("AVIF_SPEED", 6)),
+        )
+    else:
+        frames[0].save(
+            buf, format="WEBP", save_all=True, append_images=frames[1:],
+            duration=duration, loop=0, quality=int(quality),
+            method=int(cfg.get("WEBP_METHOD", PROXY_SAFE_WEBP_METHOD)),
+        )
+    return buf.getvalue()
+
+def _animation_quality_range(cfg, requested=None):
+    """(start, floor) quality for the size search in the current animated format."""
+    if ANIM_FORMAT == "avif":
+        return int(AVIF_START_QUALITY), int(AVIF_MIN_QUALITY)
+    q = int(requested or cfg.get("WEBP_QUALITY", 80) or 80)
+    return min(q, int(PROXY_SAFE_WEBP_QUALITY_CAP)), int(MIN_WEBP_QUALITY)
+
+def _write_bytes_atomic(path, data):
+    tmp = path + ".part"
+    with open(tmp, "wb") as fh:
+        fh.write(data)
+    os.replace(tmp, path)
 
 def get_banner_height():
     """
@@ -740,7 +827,7 @@ def add_footer_to_image(img: Image.Image) -> Image.Image:
     return out
 
 
-def add_footer_to_existing_webp(webp_path: str, quality=80, duration_ms=None) -> bool:
+def add_footer_to_existing_webp(webp_path: str, quality=80, duration_ms=None, method=None) -> bool:
     """
     Opens an animated/static WebP, appends the branded footer to every frame,
     then replaces the original file. Used for centerlongest_*.webp.
@@ -784,7 +871,7 @@ def add_footer_to_existing_webp(webp_path: str, quality=80, duration_ms=None) ->
             duration=durations,
             loop=loop,
             quality=q,
-            method=int(PROXY_SAFE_WEBP_METHOD),
+            method=int(method if method is not None else PROXY_SAFE_WEBP_METHOD),
         )
         os.replace(tmp_path, webp_path)
         return True
@@ -1012,12 +1099,12 @@ def create_animated_sheet_webp(video_path, base_sheet_header_footer_rgba, slots,
                 small_slots,
                 duration_sec,
                 avoid_ranges=avoid,
-                seed=(hash(video_path) ^ (sheet_index * 99991)) & 0xFFFFFFFF
+                seed=(_stable_seed(video_path) ^ (sheet_index * 99991)) & 0xFFFFFFFF
             )
 
         scr_dir = os.path.join(os.path.dirname(video_path), "scr")
         os.makedirs(scr_dir, exist_ok=True)
-        out_path = os.path.join(scr_dir, f"{ANIM_NAME_PREFIX}{sheet_index}.webp")
+        out_path = os.path.join(scr_dir, f"{ANIM_NAME_PREFIX}{sheet_index}{_anim_ext()}")
 
         base_sheet = base_sheet_header_footer_rgba.copy()
         for s in small_slots:
@@ -1052,24 +1139,15 @@ def create_animated_sheet_webp(video_path, base_sheet_header_footer_rgba, slots,
 
         q = cfg["WEBP_QUALITY"] if ANIM_WEBP_QUALITY is None else int(ANIM_WEBP_QUALITY)
         q = int(q) if q else 80
+        q_start, q_min = _animation_quality_range(cfg, q)
 
-        while q >= int(MIN_WEBP_QUALITY):
-            frames[0].save(
-                out_path,
-                format="WEBP",
-                save_all=True,
-                append_images=frames[1:],
-                duration=int(1000 / webp_fps),
-                loop=0,
-                quality=min(int(q), int(PROXY_SAFE_WEBP_QUALITY_CAP)),
-                method=int(PROXY_SAFE_WEBP_METHOD),
-            )
-            try:
-                if os.path.getsize(out_path) <= int(MAX_WEBP_BYTES):
-                    break
-            except Exception:
-                break
-            q -= 10
+        def encode(quality):
+            if STOP_EVENT.is_set():
+                raise RuntimeError("stopped")
+            return _encode_animation_bytes(frames, webp_fps, quality, cfg)
+
+        data = _fit_webp_quality(encode, int(MAX_WEBP_BYTES), q_start, q_min)
+        _write_bytes_atomic(out_path, data)
 
         return out_path
     except Exception:
@@ -1084,7 +1162,7 @@ def expected_center_webp_path(video_path, anim_index):
     if anim_index is None:
         return None
     scr_dir = os.path.join(os.path.dirname(video_path), "scr")
-    return os.path.join(scr_dir, f"{ANIM_NAME_PREFIX}{int(anim_index)}.webp")
+    return os.path.join(scr_dir, f"{ANIM_NAME_PREFIX}{int(anim_index)}{_anim_ext()}")
 
 def expected_screen_png_path(video_path):
     scr_dir = os.path.join(os.path.dirname(video_path), "scr")
@@ -1093,7 +1171,42 @@ def expected_screen_png_path(video_path):
 def expected_centerlongest_webp_path(folder, longest_video_path):
     folder_tag = _safe_tag(os.path.basename(folder.rstrip("\\/")) or "folder")
     scr_dir = os.path.join(os.path.dirname(longest_video_path), "scr")
-    return os.path.join(scr_dir, f"centerlongest_{folder_tag}.webp")
+    return os.path.join(scr_dir, f"centerlongest_{folder_tag}{_anim_ext()}")
+
+def _create_middle_avif(video_path, cfg, out_path, start, clip_seconds, out_fps, vf, w, h):
+    """Decode the clip to raw frames with FFmpeg, then encode animated AVIF with Pillow."""
+    cmd = [
+        FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+        "-ss", str(float(start)),
+        "-i", video_path,
+        "-t", str(float(clip_seconds)),
+        "-vf", f"{vf},fps={int(out_fps)}",
+        "-an", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
+    ]
+    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
+    if p.returncode != 0:
+        return None
+
+    size = int(w) * int(h) * 3
+    raw = p.stdout
+    frames = [Image.frombytes("RGB", (int(w), int(h)), raw[i:i + size]) for i in range(0, len(raw) - size + 1, size)]
+    del raw
+    if len(frames) < 2:
+        return None
+
+    if FOOTER_HEIGHT > 0 and (FOOTER_TEXT or "").strip():
+        frames = [add_footer_to_image(f.convert("RGBA")).convert("RGB") for f in frames]
+
+    q_start, q_min = _animation_quality_range(cfg)
+
+    def encode(quality):
+        if STOP_EVENT.is_set():
+            raise RuntimeError("stopped")
+        return _encode_animation_bytes(frames, out_fps, quality, cfg)
+
+    data = _fit_webp_quality(encode, int(MAX_WEBP_BYTES), q_start, q_min)
+    _write_bytes_atomic(out_path, data)
+    return out_path
 
 def create_middle_animated_webp(video_path, cfg, out_name, clip_seconds=5.0, out_fps=12, skip_existing=False):
     try:
@@ -1113,8 +1226,9 @@ def create_middle_animated_webp(video_path, cfg, out_name, clip_seconds=5.0, out
         out_path = os.path.join(scr_dir, out_name)
 
         if skip_existing and os.path.isfile(out_path):
-            q_existing = int(cfg.get("WEBP_QUALITY", 80) or 80)
-            add_footer_to_existing_webp(out_path, quality=q_existing, duration_ms=int(1000 / out_fps))
+            if out_path.lower().endswith(".webp"):
+                q_existing = int(cfg.get("WEBP_QUALITY", 80) or 80)
+                add_footer_to_existing_webp(out_path, quality=q_existing, duration_ms=int(1000 / out_fps), method=cfg.get("WEBP_METHOD"))
             return out_path
 
         vf = (
@@ -1122,44 +1236,43 @@ def create_middle_animated_webp(video_path, cfg, out_name, clip_seconds=5.0, out
             f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2"
         )
 
-        cmd = [
-            FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-            "-ss", str(float(start)),
-            "-i", video_path,
-            "-t", str(float(clip_seconds)),
-            "-vf", vf,
-            "-r", str(int(out_fps)),
-            "-an",
-            "-loop", "0",
-            "-quality", str(min(int(cfg.get("WEBP_QUALITY", 80) or 80), int(PROXY_SAFE_WEBP_QUALITY_CAP))),
-            "-method", str(int(PROXY_SAFE_WEBP_METHOD)),
-            out_path
-        ]
+        if ANIM_FORMAT == "avif":
+            return _create_middle_avif(video_path, cfg, out_path, start, clip_seconds, out_fps, vf, target_w, target_h)
 
-        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
-        if p.returncode != 0:
-            return None
+        part_path = out_path + ".part.webp"
+        q_start, q_min = _animation_quality_range(cfg)
 
-        q = int(cfg.get("WEBP_QUALITY", 80) or 80)
-        add_footer_to_existing_webp(out_path, quality=q, duration_ms=int(1000 / out_fps))
+        def encode(quality):
+            if STOP_EVENT.is_set():
+                raise RuntimeError("stopped")
+            cmd = [
+                FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+                "-ss", str(float(start)),
+                "-i", video_path,
+                "-t", str(float(clip_seconds)),
+                "-vf", vf,
+                "-r", str(int(out_fps)),
+                "-an",
+                "-loop", "0",
+                "-quality", str(int(quality)),
+                "-method", str(int(cfg.get("WEBP_METHOD", PROXY_SAFE_WEBP_METHOD))),
+                part_path
+            ]
+            p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+            if p.returncode != 0:
+                raise RuntimeError("ffmpeg failed")
+            add_footer_to_existing_webp(part_path, quality=int(quality), duration_ms=int(1000 / out_fps), method=cfg.get("WEBP_METHOD"))
+            with open(part_path, "rb") as fh:
+                return fh.read()
 
-        while True:
+        try:
+            data = _fit_webp_quality(encode, int(MAX_WEBP_BYTES), q_start, q_min)
+        finally:
             try:
-                if os.path.getsize(out_path) <= int(MAX_WEBP_BYTES):
-                    break
-            except Exception:
-                break
-            q -= 10
-            if q < int(MIN_WEBP_QUALITY):
-                break
-            cmd2 = cmd[:]
-            if "-quality" in cmd2:
-                qi = len(cmd2) - 1 - cmd2[::-1].index("-quality")
-                cmd2[qi + 1] = str(min(int(q), int(PROXY_SAFE_WEBP_QUALITY_CAP)))
-            p2 = subprocess.run(cmd2, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
-            if p2.returncode != 0:
-                return None
-            add_footer_to_existing_webp(out_path, quality=q, duration_ms=int(1000 / out_fps))
+                os.remove(part_path)
+            except OSError:
+                pass
+        _write_bytes_atomic(out_path, data)
 
         return out_path
     except Exception:
@@ -1229,7 +1342,7 @@ def generate_thumbnail_sheet(video_path, cfg, anim_index=None, skip_existing=Fal
         slots,
         duration_sec,
         avoid_ranges=[],
-        seed=(hash(video_path) & 0xFFFFFFFF)
+        seed=_stable_seed(video_path)
     )
 
     for s in slots:
@@ -1663,7 +1776,7 @@ class ThumbnailMakerApp:
         ).grid(row=0, column=1, sticky="e")
         ttk.Label(
             header,
-            text="Generate PNG sheets, center1..5 WEBP clips, centerlongest, and screen.png into /scr.",
+            text="Generate PNG sheets, center1..5 animated clips, centerlongest, and screen.png into /scr.",
             style="HeaderSub.TLabel",
         ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
@@ -1725,6 +1838,17 @@ class ThumbnailMakerApp:
             width=10
         )
         self.speed_combo.pack(side="left", padx=(8, 0))
+
+        ttk.Label(toolbar, text="Animation:").pack(side="left", padx=(12, 0))
+        self.format_var = StringVar(value="WebP")
+        self.format_combo = ttk.Combobox(
+            toolbar,
+            textvariable=self.format_var,
+            values=["WebP", "AVIF"],
+            state="readonly",
+            width=7
+        )
+        self.format_combo.pack(side="left", padx=(8, 0))
 
         ttk.Separator(toolbar, orient="vertical").pack(side="left", fill="y", padx=12)
 
@@ -1868,6 +1992,44 @@ class ThumbnailMakerApp:
         )
         self.skip_existing_toggle.pack(side="left", padx=(0, 10))
         self._update_skip_existing_toggle()
+
+        footer_row = ttk.Frame(settings, style="Card.TFrame")
+        footer_row.grid(row=3, column=0, columnspan=6, sticky="ew", pady=(10, 0))
+        footer_row.grid_columnconfigure(1, weight=1)
+
+        ttk.Label(footer_row, text="Footer:", style="Section.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
+
+        self.footer_var = tk.BooleanVar(value=False)
+        self.footer_text_var = StringVar(value=FOOTER_TEXT)
+        self.footer_text_entry = ttk.Entry(
+            footer_row,
+            textvariable=self.footer_text_var,
+            width=42,
+            style="Dark.TEntry",
+        )
+        self.footer_text_entry.grid(row=0, column=1, sticky="ew", padx=(0, 10))
+
+        self.footer_toggle = RoundedButton(
+            footer_row,
+            text="Footer: OFF",
+            command=self.toggle_footer,
+            width=130,
+            height=34,
+            bg=self.C_BG_PANEL,
+            fill=self.C_BUTTON,
+            hover_fill=self.C_BUTTON_ACTIVE,
+            outline=self.C_BORDER,
+            text_color=self.C_TEXT_MAIN,
+            font=("Segoe UI", 9, "bold"),
+        )
+        self.footer_toggle.grid(row=0, column=2, padx=(0, 10))
+
+        ttk.Label(
+            footer_row,
+            text="ON adds this text in a bar under each sheet and animation.",
+            style="PanelSub.TLabel",
+        ).grid(row=0, column=3, sticky="w")
+        self._update_footer_toggle()
 
         ttk.Label(
             settings_actions,
@@ -2262,9 +2424,12 @@ class ThumbnailMakerApp:
             self.btn_add_folder.configure(state="disabled")
             self.btn_clear.configure(state="disabled")
             self.speed_combo.configure(state="disabled")
+            self.format_combo.configure(state="disabled")
             self.skip_existing_toggle.configure(state="disabled")
             self.btn_apply_logo.configure(state="disabled")
             self.btn_preview_logo.configure(state="disabled")
+            self.footer_toggle.configure(state="disabled")
+            self.footer_text_entry.configure(state="disabled")
             self.btn_stop.configure(state="normal")
         else:
             self.btn_start.configure(state="normal")
@@ -2272,9 +2437,12 @@ class ThumbnailMakerApp:
             self.btn_add_folder.configure(state="normal")
             self.btn_clear.configure(state="normal")
             self.speed_combo.configure(state="readonly")
+            self.format_combo.configure(state="readonly")
             self.skip_existing_toggle.configure(state="normal")
             self.btn_apply_logo.configure(state="normal")
             self.btn_preview_logo.configure(state="normal")
+            self.footer_toggle.configure(state="normal")
+            self._update_footer_toggle()
             self.btn_stop.configure(state="disabled")
 
     def toggle_skip_existing(self):
@@ -2300,6 +2468,31 @@ class ThumbnailMakerApp:
             btn.text_color = self.C_TEXT_MAIN
         btn._current_fill = btn.fill
         btn._draw()
+
+    def toggle_footer(self):
+        self.footer_var.set(not bool(self.footer_var.get()))
+        self._update_footer_toggle()
+
+    def _update_footer_toggle(self):
+        btn = getattr(self, "footer_toggle", None)
+        if not btn:
+            return
+
+        enabled = bool(self.footer_var.get())
+        btn.text = "Footer: ON" if enabled else "Footer: OFF"
+        if enabled:
+            btn.fill = self.C_ACCENT
+            btn.hover_fill = self.C_ACCENT_HOVER
+            btn.outline = self.C_ACCENT
+            btn.text_color = "#0a0f12"
+        else:
+            btn.fill = self.C_BUTTON
+            btn.hover_fill = self.C_BUTTON_ACTIVE
+            btn.outline = self.C_BORDER
+            btn.text_color = self.C_TEXT_MAIN
+        btn._current_fill = btn.fill
+        btn._draw()
+        self.footer_text_entry.configure(state="normal" if enabled else "disabled")
 
     def _tree_status_tag(self, status: str) -> str:
         tag = re.sub(r"[^a-z0-9]+", "_", (status or "").lower()).strip("_")
@@ -2394,6 +2587,24 @@ class ThumbnailMakerApp:
             messagebox.showwarning("No Files", "No supported video files loaded.")
             return
 
+        global FOOTER_HEIGHT, FOOTER_TEXT, ANIM_FORMAT
+        want_avif = (self.format_var.get() or "").strip().lower() == "avif"
+        if want_avif and not _avif_supported():
+            messagebox.showwarning(
+                "AVIF Not Available",
+                "This Pillow install can't write animated AVIF (needs Pillow 11.3 or newer with AVIF support).\n"
+                "Choose WebP, or run: pip install -U pillow"
+            )
+            return
+        footer_text = (self.footer_text_var.get() or "").strip()
+        if self.footer_var.get() and not footer_text:
+            messagebox.showwarning("Footer Text Missing", "Enter footer text or turn the footer off.")
+            return
+        footer_on = bool(self.footer_var.get())
+        FOOTER_HEIGHT = FOOTER_BAR_HEIGHT if footer_on else 0
+        FOOTER_TEXT = footer_text if footer_on else ""
+
+        ANIM_FORMAT = "avif" if want_avif else "webp"
         self.state.stop_processing = False
         STOP_EVENT.clear()
         self.processing_started_at = time.time()
@@ -2417,7 +2628,7 @@ class ThumbnailMakerApp:
         for p in paths:
             self.ui_queue.put(("file_status", p, "Queued"))
 
-        self.log(f"Start: {len(paths)} files  |  Speed: {profile_name}  |  Proxy-safe: {'ON' if PROXY_SAFE_MODE else 'OFF'}  |  Skip existing: {'ON' if self.skip_existing_var.get() else 'OFF'}")
+        self.log(f"Start: {len(paths)} files  |  Speed: {profile_name}  |  Proxy-safe: {'ON' if PROXY_SAFE_MODE else 'OFF'}  |  Skip existing: {'ON' if self.skip_existing_var.get() else 'OFF'}  |  Footer: {'ON' if footer_on else 'OFF'}  |  Animation: {ANIM_FORMAT.upper()}")
         self.log("WMV/VC-1: using FFmpeg extraction to prevent NO FRAME.")
 
         t = threading.Thread(target=self._background_task, args=(paths, cfg, bool(self.skip_existing_var.get())), daemon=True)
@@ -2485,7 +2696,7 @@ class ThumbnailMakerApp:
                         out = create_middle_animated_webp(
                             longest_in_folder,
                             cfg,
-                            out_name=f"centerlongest_{folder_tag}.webp",
+                            out_name=f"centerlongest_{folder_tag}{_anim_ext()}",
                             clip_seconds=CENTERLONGEST_SECONDS,
                             out_fps=CENTERLONGEST_FPS,
                             skip_existing=skip_existing,

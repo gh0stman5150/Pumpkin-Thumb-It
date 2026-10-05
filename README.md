@@ -1,4 +1,4 @@
-# Pumpkin's Thumb It 5.1
+# Pumpkin's Thumb It 5.2
 
 ![Python](https://img.shields.io/badge/Python-GUI_3.9+_%7C_CLI_3.10+-blue)
 ![Platform](https://img.shields.io/badge/Platform-Windows_GUI_%7C_Linux_CLI-lightgrey)
@@ -16,15 +16,17 @@
 >
 > Version 5.1 includes the refreshed dark/lime Pumpkin UI, a cleaner thumbnail queue, a better progress footer, compact logo sizing controls, a Skip Existing toggle, and session-only logo changes.
 
+> Version 5.2 adds an optional **Footer** toggle, an **Animation** choice of WebP or AVIF (GUI dropdown, CLI `--format`), an encoder method that follows the speed profile, a quality search that fits each animation under the size cap at the highest quality, reproducible still-frame choices, a non-blocking logo loader, a more responsive Stop button, and automated tests for the Linux CLI. The CLI header is now 146 px, matching the GUI, so default CLI sheets are 960 px tall instead of 970.
+
 ---
 
 # Version Notes
 
-**Linux users:** the new **5.1 CLI edition** runs in a terminal or over SSH. Start with the [Linux installation and commands](linux/README.md). The CLI needs Python **3.10+**, Pillow, FFmpeg and a system font; it does not need a desktop, Tkinter, OpenCV or NumPy. The original Windows GUI scripts remain available.
+**Linux users:** the **5.2 CLI edition** runs in a terminal or over SSH. Start with the [Linux installation and commands](linux/README.md). The CLI needs Python **3.10+**, Pillow, FFmpeg and a system font; it does not need a desktop, Tkinter, OpenCV or NumPy. The original Windows GUI scripts remain available.
 
 Pumpkin's Thumb It v5 is still included in the Git repository for anyone who wants the original orange theme and old UI.
 
-Pumpkin's Thumb It 5.1 is the updated version with the new layout, refreshed controls, and dark/lime Pumpkin theme.
+Pumpkin's Thumb It 5.2 is the updated version with the new layout, refreshed controls, and dark/lime Pumpkin theme.
 
 Both included versions now generate clean output images without the former orange promotional footer bar.
 
@@ -32,7 +34,7 @@ Both included versions now generate clean output images without the former orang
 
 # Overview
 
-Pumpkin's Thumb It 5.1 creates thumbnail packs, animated previews, and screenshots from video files and folders. It is available as a Windows GUI and a Linux CLI.
+Pumpkin's Thumb It 5.2 creates thumbnail packs, animated previews, and screenshots from video files and folders. It is available as a Windows GUI and a Linux CLI.
 
 It is designed for torrent upload preparation, media previews, and fast thumbnail generation for large video folders.
 
@@ -163,13 +165,13 @@ This applies to:
 - Center and longest-video previews
 - Single preview screenshots
 
-No footer height is reserved, so generated images end at the normal content boundary. Existing files are not modified automatically; regenerate them with **Skip Existing: OFF** to remove the footer from older outputs.
+By default no footer height is reserved, so generated images end at the normal content boundary. The 5.2 GUI has an optional **Footer** toggle in Sheet Settings: turn it ON and enter your own text to add an orange bar with that text under each sheet and animation (session only, OFF by default; unavailable while a job is running). Existing files are not modified automatically; regenerate them with **Skip Existing: OFF** to remove the footer from older outputs.
 
 ---
 
 # Pumpkin Night UI Theme
 
-Version 5.1 uses a dark Pumpkin Night style theme with lime action accents.
+Version 5.2 uses a dark Pumpkin Night style theme with lime action accents.
 
 Main colours:
 
@@ -482,7 +484,7 @@ You can also add FFmpeg to your system PATH.
 From the project folder:
 
 ```bash
-python "Pumpkin’s Thumb It 5.1.py"
+python "Pumpkin’s Thumb It 5.2.py"
 ```
 
 Or double-click the `.py` file.
@@ -495,7 +497,7 @@ If your script has a different filename, run that file instead.
 
 1. Open the app.
 2. Add videos using **Add Videos**, **Add Video Folder**, or drag and drop.
-3. Select speed mode: **Normal**, **Fast**, or **Fastest**.
+3. Select speed mode: **Normal**, **Fast**, or **Fastest**. Optionally set **Animation** to **AVIF** for `.avif` animated outputs instead of WebP (needs Pillow 11.3+ with AVIF support; confirm your destination accepts animated AVIF).
 4. Optional: change the logo, preview the logo, or browse for a local logo.
 5. Choose whether **Skip Existing** should be ON or OFF.
 6. Click **Generate Thumbnails**.
