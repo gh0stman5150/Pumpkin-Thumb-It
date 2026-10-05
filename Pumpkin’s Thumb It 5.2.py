@@ -1669,8 +1669,8 @@ class ThumbnailMakerApp:
 
         self.root = TkinterDnD.Tk()
         self.root.title(APP_TITLE)
-        self.root.geometry("1380x760")
-        self.root.minsize(1180, 680)
+        self.root.geometry("1380x840")
+        self.root.minsize(1180, 760)
 
         self._setup_style()
         self._build_ui()
@@ -1906,8 +1906,9 @@ class ThumbnailMakerApp:
             style="HeaderSub.TLabel",
         ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
+        # Row 1: queue buttons on the left, run buttons on the right.
         toolbar = ttk.Frame(outer, style="Toolbar.TFrame")
-        toolbar.pack(fill="x", pady=(0, 4))
+        toolbar.pack(fill="x", pady=(0, 8))
 
         self.btn_choose = RoundedButton(
             toolbar,
@@ -1952,31 +1953,21 @@ class ThumbnailMakerApp:
         )
         self.btn_clear.pack(side="left", padx=(8, 0))
 
-        ttk.Separator(toolbar, orient="vertical").pack(side="left", fill="y", padx=12)
-
-        ttk.Label(toolbar, text="Speed:").pack(side="left")
-        self.speed_var = StringVar(value="Fast")
-        self.speed_combo = ttk.Combobox(
+        # Packed right to left, so Generate ends up first and Stop beside it.
+        self.btn_stop = RoundedButton(
             toolbar,
-            textvariable=self.speed_var,
-            values=["Normal", "Fast", "Fastest"],
-            state="readonly",
-            width=10
+            text="Stop After Current Task",
+            command=self.stop_now,
+            width=214,
+            height=38,
+            bg=self.C_BG_PRIMARY,
+            fill=self.C_BUTTON,
+            hover_fill=self.C_BUTTON_ACTIVE,
+            outline=self.C_BORDER,
+            text_color=self.C_TEXT_MAIN,
         )
-        self.speed_combo.pack(side="left", padx=(8, 0))
-
-        ttk.Label(toolbar, text="Animation:").pack(side="left", padx=(12, 0))
-        self.format_var = StringVar(value="WebP")
-        self.format_combo = ttk.Combobox(
-            toolbar,
-            textvariable=self.format_var,
-            values=["WebP", "AVIF"],
-            state="readonly",
-            width=7
-        )
-        self.format_combo.pack(side="left", padx=(8, 0))
-
-        ttk.Separator(toolbar, orient="vertical").pack(side="left", fill="y", padx=12)
+        self.btn_stop.configure(state="disabled")
+        self.btn_stop.pack(side="right")
 
         self.btn_start = RoundedButton(
             toolbar,
@@ -1991,120 +1982,48 @@ class ThumbnailMakerApp:
             text_color="#0a0f12",
             active_text_color="#0a0f12",
         )
-        self.btn_start.pack(side="left")
+        self.btn_start.pack(side="right", padx=(0, 8))
 
-        self.btn_stop = RoundedButton(
-            toolbar,
-            text="Stop After Current Task",
-            command=self.stop_now,
-            width=188,
-            height=38,
-            bg=self.C_BG_PRIMARY,
-            fill=self.C_BUTTON,
-            hover_fill=self.C_BUTTON_ACTIVE,
-            outline=self.C_BORDER,
-            text_color=self.C_TEXT_MAIN,
-        )
-        self.btn_stop.configure(state="disabled")
-        self.btn_stop.pack(side="left", padx=(8, 0))
-
+        # Sheet Settings card: one captioned row per concern (Output, Logo, Footer).
         settings = ttk.Frame(outer, style="Card.TFrame")
         settings.pack(fill="x", pady=(0, 8))
+        settings.grid_columnconfigure(0, minsize=70)
         settings.grid_columnconfigure(1, weight=1)
 
         ttk.Label(settings, text="Sheet Settings", style="Section.TLabel").grid(
-            row=0, column=0, columnspan=6, sticky="w", pady=(0, 8)
+            row=0, column=0, columnspan=3, sticky="w", pady=(0, 8)
         )
-        ttk.Label(settings, text="Logo:", style="Section.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 8))
 
-        self.logo_url_var = StringVar(value=LOGO_URL)
-        self.logo_width_var = StringVar(value=str(LOGO_MAX_W_PX))
-        self.logo_height_var = StringVar(value=str(LOGO_MAX_H_PX))
+        # -- Output row: speed, animation format, skip existing
+        ttk.Label(settings, text="Output", style="Section.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 8))
+        output_row = ttk.Frame(settings, style="Card.TFrame")
+        output_row.grid(row=1, column=1, columnspan=2, sticky="w", pady=(0, 10))
 
-        self.logo_url_entry = ttk.Entry(
-            settings,
-            textvariable=self.logo_url_var,
-            width=42,
-            style="Dark.TEntry",
+        ttk.Label(output_row, text="Speed", style="PanelSub.TLabel").pack(side="left")
+        self.speed_var = StringVar(value="Fast")
+        self.speed_combo = ttk.Combobox(
+            output_row,
+            textvariable=self.speed_var,
+            values=["Normal", "Fast", "Fastest"],
+            state="readonly",
+            width=10
         )
-        self.logo_url_entry.grid(row=1, column=1, sticky="ew", padx=(0, 10))
+        self.speed_combo.pack(side="left", padx=(8, 18))
 
-        logo_size_wrap = ttk.Frame(settings, style="Card.TFrame")
-        logo_size_wrap.grid(row=1, column=2, columnspan=4, sticky="w")
-
-        ttk.Label(logo_size_wrap, text="W:", style="PanelSub.TLabel").pack(side="left")
-        self.logo_width_entry = ttk.Entry(
-            logo_size_wrap,
-            textvariable=self.logo_width_var,
-            width=6,
-            style="Dark.TEntry",
+        ttk.Label(output_row, text="Animation", style="PanelSub.TLabel").pack(side="left")
+        self.format_var = StringVar(value="WebP")
+        self.format_combo = ttk.Combobox(
+            output_row,
+            textvariable=self.format_var,
+            values=["WebP", "AVIF"],
+            state="readonly",
+            width=7
         )
-        self.logo_width_entry.pack(side="left", padx=(4, 10))
-
-        ttk.Label(logo_size_wrap, text="H:", style="PanelSub.TLabel").pack(side="left")
-        self.logo_height_entry = ttk.Entry(
-            logo_size_wrap,
-            textvariable=self.logo_height_var,
-            width=6,
-            style="Dark.TEntry",
-        )
-        self.logo_height_entry.pack(side="left", padx=(4, 0))
-
-        settings_actions = ttk.Frame(settings, style="Card.TFrame")
-        settings_actions.grid(row=2, column=0, columnspan=6, sticky="ew", pady=(10, 0))
-
-        self.btn_apply_logo = RoundedButton(
-            settings_actions,
-            text="Apply Logo",
-            command=self.save_logo_settings,
-            width=92,
-            height=34,
-            bg=self.C_BG_PANEL,
-            fill=self.C_ACCENT,
-            hover_fill=self.C_ACCENT_HOVER,
-            outline=self.C_ACCENT,
-            text_color="#0a0f12",
-            active_text_color="#0a0f12",
-            font=("Segoe UI", 9, "bold"),
-        ).pack(side="left", padx=(0, 6))
-
-        self.btn_preview_logo = RoundedButton(
-            settings_actions,
-            text="Preview",
-            command=self.preview_logo,
-            width=78,
-            height=34,
-            bg=self.C_BG_PANEL,
-            fill=self.C_BUTTON,
-            hover_fill=self.C_BUTTON_ACTIVE,
-            outline=self.C_BORDER,
-            text_color=self.C_TEXT_MAIN,
-            font=("Segoe UI", 9, "bold"),
-        ).pack(side="left", padx=(0, 6))
-
-        RoundedButton(
-            settings_actions,
-            text="Browse",
-            command=self.browse_local_logo,
-            width=78,
-            height=34,
-            bg=self.C_BG_PANEL,
-            fill=self.C_BUTTON,
-            hover_fill=self.C_BUTTON_ACTIVE,
-            outline=self.C_BORDER,
-            text_color=self.C_TEXT_MAIN,
-            font=("Segoe UI", 9, "bold"),
-        ).pack(side="left", padx=(0, 10))
-
-        ttk.Label(
-            settings_actions,
-            text="Recommended max: 420 x 130",
-            style="PanelSub.TLabel",
-        ).pack(side="left", padx=(0, 14))
+        self.format_combo.pack(side="left", padx=(8, 18))
 
         self.skip_existing_var = tk.BooleanVar(value=bool(SKIP_EXISTING_OUTPUTS))
         self.skip_existing_toggle = RoundedButton(
-            settings_actions,
+            output_row,
             text="Skip existing",
             command=self.toggle_skip_existing,
             width=154,
@@ -2119,24 +2038,118 @@ class ThumbnailMakerApp:
         self.skip_existing_toggle.pack(side="left", padx=(0, 10))
         self._update_skip_existing_toggle()
 
-        footer_row = ttk.Frame(settings, style="Card.TFrame")
-        footer_row.grid(row=3, column=0, columnspan=6, sticky="ew", pady=(10, 0))
-        footer_row.grid_columnconfigure(1, weight=1)
+        ttk.Label(
+            output_row,
+            text="ON skips outputs already in /scr; OFF rebuilds them.",
+            style="PanelSub.TLabel",
+        ).pack(side="left")
 
-        ttk.Label(footer_row, text="Footer:", style="Section.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        # -- Logo rows: source and size, then actions
+        ttk.Label(settings, text="Logo", style="Section.TLabel").grid(row=2, column=0, sticky="w", padx=(0, 8))
+
+        self.logo_url_var = StringVar(value=LOGO_URL)
+        self.logo_width_var = StringVar(value=str(LOGO_MAX_W_PX))
+        self.logo_height_var = StringVar(value=str(LOGO_MAX_H_PX))
+
+        self.logo_url_entry = ttk.Entry(
+            settings,
+            textvariable=self.logo_url_var,
+            style="Dark.TEntry",
+        )
+        self.logo_url_entry.grid(row=2, column=1, sticky="ew", padx=(0, 12))
+
+        logo_size_wrap = ttk.Frame(settings, style="Card.TFrame")
+        logo_size_wrap.grid(row=2, column=2, sticky="e")
+
+        ttk.Label(logo_size_wrap, text="W", style="PanelSub.TLabel").pack(side="left")
+        self.logo_width_entry = ttk.Entry(
+            logo_size_wrap,
+            textvariable=self.logo_width_var,
+            width=6,
+            style="Dark.TEntry",
+        )
+        self.logo_width_entry.pack(side="left", padx=(4, 10))
+
+        ttk.Label(logo_size_wrap, text="H", style="PanelSub.TLabel").pack(side="left")
+        self.logo_height_entry = ttk.Entry(
+            logo_size_wrap,
+            textvariable=self.logo_height_var,
+            width=6,
+            style="Dark.TEntry",
+        )
+        self.logo_height_entry.pack(side="left", padx=(4, 0))
+
+        logo_actions = ttk.Frame(settings, style="Card.TFrame")
+        logo_actions.grid(row=3, column=1, columnspan=2, sticky="w", pady=(8, 10))
+
+        self.btn_apply_logo = RoundedButton(
+            logo_actions,
+            text="Apply Logo",
+            command=self.save_logo_settings,
+            width=92,
+            height=34,
+            bg=self.C_BG_PANEL,
+            fill=self.C_ACCENT,
+            hover_fill=self.C_ACCENT_HOVER,
+            outline=self.C_ACCENT,
+            text_color="#0a0f12",
+            active_text_color="#0a0f12",
+            font=("Segoe UI", 9, "bold"),
+        )
+        self.btn_apply_logo.pack(side="left", padx=(0, 6))
+
+        self.btn_preview_logo = RoundedButton(
+            logo_actions,
+            text="Preview",
+            command=self.preview_logo,
+            width=78,
+            height=34,
+            bg=self.C_BG_PANEL,
+            fill=self.C_BUTTON,
+            hover_fill=self.C_BUTTON_ACTIVE,
+            outline=self.C_BORDER,
+            text_color=self.C_TEXT_MAIN,
+            font=("Segoe UI", 9, "bold"),
+        )
+        self.btn_preview_logo.pack(side="left", padx=(0, 6))
+
+        RoundedButton(
+            logo_actions,
+            text="Browse",
+            command=self.browse_local_logo,
+            width=78,
+            height=34,
+            bg=self.C_BG_PANEL,
+            fill=self.C_BUTTON,
+            hover_fill=self.C_BUTTON_ACTIVE,
+            outline=self.C_BORDER,
+            text_color=self.C_TEXT_MAIN,
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="left", padx=(0, 12))
+
+        ttk.Label(
+            logo_actions,
+            text="URL or file path. Recommended max 420 x 130. The last logo and folder are remembered.",
+            style="PanelSub.TLabel",
+        ).pack(side="left")
+
+        # -- Footer row: text and on/off
+        ttk.Label(settings, text="Footer", style="Section.TLabel").grid(row=4, column=0, sticky="w", padx=(0, 8))
 
         self.footer_var = tk.BooleanVar(value=False)
         self.footer_text_var = StringVar(value=FOOTER_TEXT)
         self.footer_text_entry = ttk.Entry(
-            footer_row,
+            settings,
             textvariable=self.footer_text_var,
-            width=42,
             style="Dark.TEntry",
         )
-        self.footer_text_entry.grid(row=0, column=1, sticky="ew", padx=(0, 10))
+        self.footer_text_entry.grid(row=4, column=1, sticky="ew", padx=(0, 12))
+
+        footer_actions = ttk.Frame(settings, style="Card.TFrame")
+        footer_actions.grid(row=4, column=2, sticky="e")
 
         self.footer_toggle = RoundedButton(
-            footer_row,
+            footer_actions,
             text="Footer: OFF",
             command=self.toggle_footer,
             width=130,
@@ -2148,20 +2161,14 @@ class ThumbnailMakerApp:
             text_color=self.C_TEXT_MAIN,
             font=("Segoe UI", 9, "bold"),
         )
-        self.footer_toggle.grid(row=0, column=2, padx=(0, 10))
-
-        ttk.Label(
-            footer_row,
-            text="ON adds this text in a bar under each sheet and animation.",
-            style="PanelSub.TLabel",
-        ).grid(row=0, column=3, sticky="w")
+        self.footer_toggle.pack(side="left")
         self._update_footer_toggle()
 
         ttk.Label(
-            settings_actions,
-            text="ON skips outputs already in /scr; OFF rebuilds them.",
+            settings,
+            text="ON adds this text in a bar under each sheet and animation.",
             style="PanelSub.TLabel",
-        ).pack(side="left", padx=(0, 12))
+        ).grid(row=5, column=1, columnspan=2, sticky="w", pady=(4, 0))
 
         self.main_pane = ttk.Panedwindow(outer, orient="vertical")
         self.main_pane.pack(fill="both", expand=True, pady=(4, 4))
@@ -2293,7 +2300,8 @@ class ThumbnailMakerApp:
         log_scroll.pack(side="left", fill="y")
 
         footer = ttk.Frame(outer, style="StatusBar.TFrame")
-        footer.pack(side="bottom", fill="x", pady=(4, 0))
+        # Pack before the expanding file/log pane so the status bar keeps its space on short windows.
+        footer.pack(side="bottom", fill="x", pady=(4, 0), before=self.main_pane)
         footer.grid_columnconfigure(1, weight=1)
 
         self.status_var = StringVar(value="Ready")
