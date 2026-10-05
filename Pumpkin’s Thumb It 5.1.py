@@ -424,11 +424,11 @@ def _ffmpeg_extract_frame_pil_scaled(video_path: str, time_sec: float, out_w: in
         f"pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2"
     )
     cmds = [
-        [FFMPEG, "-hide_banner", "-loglevel", "error",
+        [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin",
          "-ss", str(float(time_sec)), "-i", video_path,
          "-frames:v", "1", "-vf", vf,
          "-f", "image2pipe", "-vcodec", "png", "pipe:1"],
-        [FFMPEG, "-hide_banner", "-loglevel", "error",
+        [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin",
          "-i", video_path, "-ss", str(float(time_sec)),
          "-frames:v", "1", "-vf", vf,
          "-f", "image2pipe", "-vcodec", "png", "pipe:1"],
@@ -436,7 +436,12 @@ def _ffmpeg_extract_frame_pil_scaled(video_path: str, time_sec: float, out_w: in
     for cmd in cmds:
         try:
             p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            out, _ = p.communicate(timeout=45)
+            try:
+                out, _ = p.communicate(timeout=45)
+            except subprocess.TimeoutExpired:
+                p.kill()
+                p.communicate()
+                continue
             if p.returncode == 0 and out:
                 return Image.open(BytesIO(out)).convert("RGB")
         except Exception:
@@ -445,11 +450,11 @@ def _ffmpeg_extract_frame_pil_scaled(video_path: str, time_sec: float, out_w: in
 
 def _ffmpeg_extract_frame_pil_raw(video_path: str, time_sec: float):
     cmds = [
-        [FFMPEG, "-hide_banner", "-loglevel", "error",
+        [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin",
          "-ss", str(float(time_sec)), "-i", video_path,
          "-frames:v", "1",
          "-f", "image2pipe", "-vcodec", "png", "pipe:1"],
-        [FFMPEG, "-hide_banner", "-loglevel", "error",
+        [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin",
          "-i", video_path, "-ss", str(float(time_sec)),
          "-frames:v", "1",
          "-f", "image2pipe", "-vcodec", "png", "pipe:1"],
@@ -457,7 +462,12 @@ def _ffmpeg_extract_frame_pil_raw(video_path: str, time_sec: float):
     for cmd in cmds:
         try:
             p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            out, _ = p.communicate(timeout=45)
+            try:
+                out, _ = p.communicate(timeout=45)
+            except subprocess.TimeoutExpired:
+                p.kill()
+                p.communicate()
+                continue
             if p.returncode == 0 and out:
                 return Image.open(BytesIO(out)).convert("RGB")
         except Exception:
@@ -1102,7 +1112,7 @@ def create_middle_animated_webp(video_path, cfg, out_name, clip_seconds=5.0, out
         )
 
         cmd = [
-            FFMPEG, "-hide_banner", "-loglevel", "error",
+            FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
             "-ss", str(float(start)),
             "-i", video_path,
             "-t", str(float(clip_seconds)),

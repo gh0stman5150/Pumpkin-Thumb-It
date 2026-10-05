@@ -6,6 +6,8 @@ import hashlib
 import os
 import random
 import tempfile
+import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from io import BytesIO
@@ -63,25 +65,46 @@ def check_webp():
             raise MediaError("Pillow cannot write animated WebP files")
 
 
+LOGO_MAX_BYTES = 20 * 1024 * 1024
+UMASK = os.umask(0)  # read once at import; os.umask is process-wide and not thread-safe
+os.umask(UMASK)
+
+
+class _WebRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not newurl.lower().startswith(("http://", "https://")):
+            raise urllib.error.URLError("redirect to a non-HTTP(S) address refused")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _describe_source(source: str) -> str:
+    if source.lower().startswith(("http://", "https://")):
+        return urllib.parse.urlsplit(source).hostname or "remote logo"
+    return source
+
+
 def load_logo(source: str | None, max_w: int, max_h: int):
     if not source:
         return None
     try:
         if source.lower().startswith(("http://", "https://")):
             request = urllib.request.Request(source, headers={"User-Agent": "Pumpkins-Thumb-It/5.1"})
-            with urllib.request.urlopen(request, timeout=15) as response:
-                data = response.read(20 * 1024 * 1024 + 1)
-            if len(data) > 20 * 1024 * 1024:
+            opener = urllib.request.build_opener(_WebRedirects)
+            with opener.open(request, timeout=15) as response:
+                data = response.read(LOGO_MAX_BYTES + 1)
+            if len(data) > LOGO_MAX_BYTES:
                 raise ValueError("logo exceeds 20 MiB")
             handle = BytesIO(data)
         else:
             handle = Path(source).expanduser()
+            if handle.stat().st_size > LOGO_MAX_BYTES:
+                raise ValueError("logo exceeds 20 MiB")
         with Image.open(handle) as image:
             logo = image.convert("RGBA")
         logo.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
         return logo
     except Exception as exc:
-        raise MediaError(f"Cannot load logo {source!r}: {exc}") from exc
+        raise MediaError(f"Cannot load logo {_describe_source(source)!r}: {exc}") from exc
 
 
 def layout(header_height: int):
@@ -263,6 +286,7 @@ class Renderer:
             else:
                 frames.save(temporary, format="PNG", compress_level=6)
             self.runner.check()
+            os.chmod(temporary, 0o666 & ~UMASK)
             os.replace(temporary, path)
         finally:
             if os.path.exists(temporary):
