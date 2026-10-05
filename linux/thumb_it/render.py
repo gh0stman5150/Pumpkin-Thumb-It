@@ -41,6 +41,7 @@ class Settings:
     logo_width: int = 420
     logo_height: int = 120
     font: str | None = None
+    format: str = "webp"  # animated output format: webp or avif
 
 
 def choose_font(configured: str | None = None):
@@ -83,12 +84,27 @@ def _describe_source(source: str) -> str:
     return source
 
 
+def check_avif():
+    """Raise MediaError unless Pillow can write animated AVIF."""
+    if not features.check("avif"):
+        raise MediaError("Pillow has no AVIF support. Use Pillow 11.3 or newer from a wheel with AVIF, or use --format webp.")
+    buffer = BytesIO()
+    frames = [Image.new("RGB", (16, 16), color) for color in ("red", "blue")]
+    try:
+        frames[0].save(buffer, format="AVIF", save_all=True, append_images=frames[1:], duration=100, quality=50)
+        with Image.open(BytesIO(buffer.getvalue())) as image:
+            if image.n_frames != 2:
+                raise ValueError("expected 2 frames")
+    except Exception as exc:
+        raise MediaError(f"Pillow cannot write animated AVIF files ({exc}). Use --format webp.") from exc
+
+
 def load_logo(source: str | None, max_w: int, max_h: int):
     if not source:
         return None
     try:
         if source.lower().startswith(("http://", "https://")):
-            request = urllib.request.Request(source, headers={"User-Agent": "Pumpkins-Thumb-It/5.1"})
+            request = urllib.request.Request(source, headers={"User-Agent": "Pumpkins-Thumb-It/5.2"})
             opener = urllib.request.build_opener(_WebRedirects)
             with opener.open(request, timeout=15) as response:
                 data = response.read(LOGO_MAX_BYTES + 1)
@@ -154,8 +170,10 @@ class Renderer:
         self.runner, self.settings = runner, settings
         self.font, self.font_path = choose_font(settings.font)
         check_webp()
+        if settings.format == "avif":
+            check_avif()
         self.logo = load_logo(settings.logo, settings.logo_width, settings.logo_height)
-        self.header_height = max(156, self.logo.height + 20 if self.logo else 0)
+        self.header_height = max(146, self.logo.height + 20 if self.logo else 0)
         self.slots, self.sheet_height = layout(self.header_height)
 
     def frame(self, video: Video, seconds: float, size=None):
@@ -264,6 +282,48 @@ class Renderer:
         return self.clip(video, max(0, (video.duration - seconds) / 2), seconds,
                          max(2, round(seconds * self.settings.fps)), (960, 540))
 
+    def fit_animation(self, frames, quality, method, name, floor=25):
+        """Encode at the highest quality (<= quality, >= floor) that fits the size limit.
+
+        `method` is the WebP method, or the AVIF speed when the format is avif.
+        """
+        limit = self.settings.max_webp_bytes
+        avif = self.settings.format == "avif"
+
+        def encode(q):
+            self.runner.check()
+            buffer = BytesIO()
+            duration = round(1000 / self.settings.fps)
+            if avif:
+                frames[0].save(buffer, format="AVIF", save_all=True, append_images=frames[1:],
+                               duration=duration, quality=q, speed=method)
+            else:
+                frames[0].save(buffer, format="WEBP", save_all=True, append_images=frames[1:],
+                               duration=duration, loop=0, quality=q, method=method)
+            return buffer.getvalue()
+
+        data = encode(quality)
+        if len(data) <= limit or quality <= floor:
+            if len(data) > limit:
+                raise MediaError(self._too_big(name))
+            return data
+        best = encode(floor)
+        if len(best) > limit:
+            raise MediaError(self._too_big(name))
+        low, high = floor, quality
+        while high - low > 1:
+            mid = (low + high) // 2
+            data = encode(mid)
+            if len(data) <= limit:
+                best, low = data, mid
+            else:
+                high = mid
+        return best
+
+    def _too_big(self, name):
+        return (f"Cannot fit {name} under {self.settings.max_webp_bytes / 1048576:g} MiB; "
+                "reduce --seconds/--fps or increase --max-webp-mib")
+
     def save(self, path: Path, frames, *, animated=False):
         self.runner.check()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -271,18 +331,15 @@ class Renderer:
         os.close(descriptor)
         try:
             if animated:
-                quality, method = {"normal": (85, 6), "fast": (75, 3), "fastest": (70, 1)}[self.settings.speed]
-                quality = min(quality, 75)  # 5.1 proxy-safe quality cap.
-                while True:
-                    self.runner.check()
-                    frames[0].save(temporary, format="WEBP", save_all=True, append_images=frames[1:],
-                                   duration=round(1000 / self.settings.fps), loop=0, quality=quality, method=method)
-                    if os.path.getsize(temporary) <= self.settings.max_webp_bytes:
-                        break
-                    if quality == 25:
-                        raise MediaError(f"Cannot fit {path.name} under {self.settings.max_webp_bytes / 1048576:g} MiB; "
-                                         "reduce --seconds/--fps or increase --max-webp-mib")
-                    quality = max(25, quality - 10)
+                if self.settings.format == "avif":
+                    quality, floor = 90, 20
+                    method = {"normal": 4, "fast": 6, "fastest": 8}[self.settings.speed]  # AVIF speed
+                else:
+                    quality, method = {"normal": (85, 6), "fast": (75, 3), "fastest": (70, 1)}[self.settings.speed]
+                    quality, floor = min(quality, 75), 25  # 5.1 proxy-safe quality cap.
+                data = self.fit_animation(frames, quality, method, path.name, floor)
+                with open(temporary, "wb") as handle:
+                    handle.write(data)
             else:
                 frames.save(temporary, format="PNG", compress_level=6)
             self.runner.check()
@@ -302,7 +359,7 @@ def valid_existing(path: Path):
         raise MediaError(f"Output path is not a file: {path}")
     try:
         with Image.open(path) as image:
-            expected = "WEBP" if path.suffix == ".webp" else "PNG"
+            expected = {".webp": "WEBP", ".avif": "AVIF"}.get(path.suffix, "PNG")
             if image.format != expected:
                 raise ValueError(f"expected {expected}")
             image.verify()

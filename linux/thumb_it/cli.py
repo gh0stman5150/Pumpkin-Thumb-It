@@ -41,14 +41,14 @@ def add_tools(parser):
 
 def make_parser():
     parser = argparse.ArgumentParser(
-        prog="thumb-it", description="Pumpkin's Thumb It 5.1 — thumbnail sheets and animated previews.",
+        prog="thumb-it", description="Pumpkin's Thumb It 5.2 — thumbnail sheets and animated previews.",
         epilog="Check installation: thumb-it doctor. Output: each video's sibling scr/ folder.",
     )
     parser.add_argument("--version", action="version", version=f"Pumpkin's Thumb It CLI {__version__}")
     parser.add_argument("paths", nargs="+", help="video files and/or folders (quote paths containing spaces)")
     parser.add_argument("-r", "--recursive", action="store_true", help="include subfolders; skip scr/ and directory symlinks")
     parser.add_argument("--speed", choices=("normal", "fast", "fastest"), default="fast",
-                        help="WebP encoding profile (default: fast)")
+                        help="animation encoding profile (default: fast)")
     existing = parser.add_mutually_exclusive_group()
     existing.add_argument("--overwrite", action="store_true", help="replace existing outputs")
     existing.add_argument("--skip-existing", action="store_true", help="skip readable existing outputs (the default)")
@@ -66,8 +66,10 @@ def make_parser():
                         help="maximum animation clip length (default: 6; shorter video regions limit this)")
     parser.add_argument("--fps", type=bounded_number(1, 60, integer=True), default=12, metavar="FPS",
                         help="animation playback FPS (default: 12; seconds × FPS must be <= 120)")
+    parser.add_argument("--format", choices=("webp", "avif"), default="webp",
+                        help="animated output format (default: webp; avif needs Pillow 11.3+ with AVIF)")
     parser.add_argument("--max-webp-mib", type=bounded_number(0.01, 100), default=5.0, metavar="MIB",
-                        help="maximum size of each WebP in MiB (default: 5)")
+                        help="maximum size of each animated image (WebP or AVIF) in MiB (default: 5)")
     parser.add_argument("--jobs", type=bounded_number(1, 32, integer=True),
                         default=min(2, max(1, (os.cpu_count() or 2) // 2)), metavar="COUNT",
                         help="videos processed at once (default: up to 2, using CPU count)")
@@ -143,10 +145,10 @@ def preview(groups, args, report):
         for index, path in enumerate(paths, 1):
             report.log(f"{path} -> {out / ('sheet_' + path.stem + '.png')}", always=True)
             if not args.sheets_only and index <= args.animated_sheets:
-                report.log(f"  animation -> {out / ('center' + str(index) + '.webp')}", always=True)
+                report.log(f"  animation -> {out / ('center' + str(index) + '.' + args.format)}", always=True)
         if not args.sheets_only:
             report.log(f"  longest selected video (determined when processing) -> "
-                       f"{out / ('centerlongest_' + folder_tag(folder) + '.webp')}", always=True)
+                       f"{out / ('centerlongest_' + folder_tag(folder) + '.' + args.format)}", always=True)
             report.log(f"  longest selected video screenshot -> {out / 'screen.png'}", always=True)
 
 
@@ -167,9 +169,15 @@ def doctor(argv):
         failures += 1
     try:
         from PIL import __version__ as pillow_version
-        from .render import check_webp, choose_font
+        from .media import MediaError
+        from .render import check_avif, check_webp, choose_font
         check_webp()
         print(f"OK: Pillow {pillow_version}, PNG and animated WebP encoding")
+        try:
+            check_avif()
+            print("OK: animated AVIF encoding (optional, --format avif)")
+        except MediaError as exc:
+            print(f"NOTE: animated AVIF unavailable ({exc})")
         _, font = choose_font(args.font)
         print(f"OK: font {font}")
     except Exception as exc:
@@ -188,7 +196,7 @@ def process(groups, args, report):
 
     runner = Runner(args.ffmpeg, args.ffprobe, args.timeout)
     settings = Settings(args.speed, args.seconds, args.fps, int(args.max_webp_mib * 1048576),
-                        args.logo, args.logo_width, args.logo_height, args.font)
+                        args.logo, args.logo_width, args.logo_height, args.font, args.format)
     renderer = Renderer(runner, settings)
     previous_term = signal.getsignal(signal.SIGTERM)
     signal.signal(signal.SIGTERM, lambda *_: runner.stopped.set())
@@ -216,7 +224,7 @@ def process(groups, args, report):
         directory = video.path.parent / "scr"
         counts = list(output(directory / f"sheet_{video.path.stem}.png", lambda: renderer.sheet(video)))
         if not args.sheets_only and index <= args.animated_sheets:
-            result = output(directory / f"center{index}.webp",
+            result = output(directory / f"center{index}.{args.format}",
                             lambda: renderer.animated_sheet(video, index), animated=True)
             counts = [a + b for a, b in zip(counts, result)]
         return counts
@@ -258,7 +266,7 @@ def process(groups, args, report):
                 longest = max((video for video, _ in videos), key=lambda video: video.duration)
                 out = folder / "scr"
                 for path, make, animated in (
-                    (out / f"centerlongest_{folder_tag(folder)}.webp", lambda: renderer.center(longest), True),
+                    (out / f"centerlongest_{folder_tag(folder)}.{args.format}", lambda: renderer.center(longest), True),
                     (out / "screen.png", lambda: renderer.frame(longest, longest.duration / 2), False),
                 ):
                     result = output(path, make, animated)

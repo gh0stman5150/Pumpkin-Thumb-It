@@ -72,10 +72,10 @@ class CollectTests(unittest.TestCase):
 
 class LayoutTests(unittest.TestCase):
     def test_default_sheet_width(self):
-        slots, height = render.layout(156)
+        slots, height = render.layout(146)
         self.assertEqual(len(slots), 21)
         self.assertEqual(sum(1 for s in slots if s[4]), 5)
-        self.assertEqual(height, 970)
+        self.assertEqual(height, 960)
 
 
 class MainTests(unittest.TestCase):
@@ -140,6 +140,29 @@ class SaveTests(unittest.TestCase):
                 self.make_renderer().save(target, frames, animated=True)
             self.assertEqual(list(Path(tmp).iterdir()), [])
 
+    def test_quality_search_fits_limit_with_best_quality(self):
+        import io
+        import random
+        from PIL import Image
+        rng = random.Random(1)
+        frames = [Image.frombytes("RGB", (96, 96), bytes(rng.randrange(256) for _ in range(96 * 96 * 3)))
+                  for _ in range(3)]
+
+        def size(quality):
+            buffer = io.BytesIO()
+            frames[0].save(buffer, format="WEBP", save_all=True, append_images=frames[1:],
+                           duration=83, loop=0, quality=quality, method=1)
+            return buffer.tell()
+
+        low, high = size(25), size(75)
+        self.assertLess(low, high)
+        limit = (low + high) // 2
+        renderer = self.make_renderer()
+        renderer.settings = render.Settings(max_webp_bytes=limit, fps=12)
+        data = renderer.fit_animation(frames, 75, 1, "t.webp")
+        self.assertLessEqual(len(data), limit)
+        self.assertGreater(len(data), low)
+
     def test_valid_existing_flags_truncated_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             bad = touch(Path(tmp) / "a.png", b"not a png")
@@ -166,6 +189,32 @@ class EndToEndTests(unittest.TestCase):
             before = (scr / "sheet_clip.png").stat().st_mtime_ns
             self.assertEqual(cli.main(args), 0)
             self.assertEqual((scr / "sheet_clip.png").stat().st_mtime_ns, before)
+
+
+@unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg not installed")
+class AvifEndToEndTests(unittest.TestCase):
+    def test_avif_pack_generated_readable_and_under_limit(self):
+        try:
+            render.check_avif()
+        except MediaError:
+            self.skipTest("Pillow cannot write animated AVIF")
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "clip.mp4"
+            subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=10:duration=12",
+                            "-pix_fmt", "yuv420p", str(video)], check=True)
+            args = [str(video), "--quiet", "--seconds", "1", "--fps", "8", "--format", "avif", "--max-webp-mib", "0.5"]
+            self.assertEqual(cli.main(args), 0)
+            scr = Path(tmp) / "scr"
+            names = sorted(p.name for p in scr.iterdir())
+            self.assertIn("center1.avif", names)
+            self.assertTrue(any(n.startswith("centerlongest_") and n.endswith(".avif") for n in names))
+            self.assertFalse(any(n.endswith(".webp") for n in names))
+            for animation in scr.glob("*.avif"):
+                self.assertLessEqual(animation.stat().st_size, 512 * 1024)
+                self.assertTrue(render.valid_existing(animation))
+            before = (scr / "center1.avif").stat().st_mtime_ns
+            self.assertEqual(cli.main(args), 0)
+            self.assertEqual((scr / "center1.avif").stat().st_mtime_ns, before)
 
 
 if __name__ == "__main__":

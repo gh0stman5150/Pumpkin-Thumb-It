@@ -1,6 +1,6 @@
-# Pumpkin's Thumb It 5.1 — Linux CLI
+# Pumpkin's Thumb It 5.2 — Linux CLI
 
-The terminal edition uses the 5.1 thumbnail layout, media-information header, rounded thumbnails and footer-free outputs. It runs without a desktop session, including over SSH and in scheduled jobs. This folder is self-contained; the Windows GUI files are not required.
+The terminal edition uses the 5.2 thumbnail layout, media-information header, rounded thumbnails and footer-free outputs. It runs without a desktop session, including over SSH and in scheduled jobs. This folder is self-contained; the Windows GUI files are not required.
 
 ## Get the App
 
@@ -99,11 +99,12 @@ Always quote paths containing spaces or shell punctuation. For a relative filena
 | Command or option | Meaning / default |
 | --- | --- |
 | `thumb-it PATH [PATH ...]` | Process one or more video files or directories. Directories include only their immediate files unless `--recursive` is used. |
-| `thumb-it doctor` | Check Python, FFmpeg, FFprobe, Pillow animated WebP support, and the selected font. |
+| `thumb-it doctor` | Check Python, FFmpeg, FFprobe, Pillow animated WebP support, optional animated AVIF support, and the selected font. |
 | `-h`, `--help` | Show usage and options; also available as `thumb-it doctor --help`. |
 | `--version` | Print the CLI version. |
 | `-r`, `--recursive` | Include subfolders; omit `scr` directories and do not traverse directory symlinks. |
-| `--speed normal\|fast\|fastest` | WebP encoding profile; default `fast`. Normal spends more time compressing, Fastest less. PNG settings remain the same. |
+| `--format webp\|avif` | Format of the animated outputs (`center1`–`center5` and `centerlongest`); default `webp`. `avif` writes `.avif` files and needs Pillow 11.3 or newer with AVIF support (`thumb-it doctor` reports it). PNG sheets and `screen.png` are unaffected. Check that your destination accepts animated AVIF before choosing it. |
+| `--speed normal\|fast\|fastest` | Animation encoding profile; default `fast`. Normal spends more time compressing, Fastest less. PNG settings remain the same. |
 | `--skip-existing` | Skip existing readable output images; this is already the default. |
 | `--overwrite` | Replace output images, including unreadable ones. Cannot be combined with `--skip-existing`. |
 | `--logo PATH_OR_URL` | Local PNG/JPEG/WebP or HTTP(S) image. Remote downloads time out after 15 seconds and are limited to 20 MiB. |
@@ -114,7 +115,7 @@ Always quote paths containing spaces or shell punctuation. For a relative filena
 | `--animated-sheets COUNT` | Number of selected videos per folder receiving animated sheets, 0–5; default `5`. Setting `0` still produces the longest preview and `screen.png`. |
 | `--seconds SECONDS` | Maximum clip length, 0.1–30; default `6`. Animated sheet regions may be shorter. |
 | `--fps FPS` | Animation playback frame rate, 1–60; default `12`. `seconds × fps` must be at most 120 to limit memory. |
-| `--max-webp-mib MIB` | Maximum size per WebP, 0.01–100 MiB; default `5`. Encoding quality is reduced to try to meet it; inability to meet it is an error. |
+| `--max-webp-mib MIB` | Maximum size per animated image (WebP or AVIF), 0.01–100 MiB; default `5`. The encoder searches for the highest quality that fits; inability to meet it is an error. |
 | `--jobs COUNT` | Concurrent video jobs, 1–32; default at most 2 depending on CPU count. Use `1` on machines with limited memory. |
 | `--dry-run` | List intended outputs without decoding, downloading a logo, checking image contents or creating files. Does not require FFmpeg or Pillow. |
 | `--quiet` | Hide progress; still print errors and the final summary. |
@@ -129,7 +130,7 @@ Supported extensions, case-insensitively: `.mp4`, `.m4v`, `.mkv`, `.mov`, `.avi`
 
 By default, the CLI creates `sheet_<video-name>.png` for every selected video. The first five selected videos in each folder, ordered by case-insensitive filename, receive `center1.webp` through `center5.webp`. The longest selected readable video in that folder supplies `centerlongest_<folder-name>.webp` and `screen.png`. Selecting a single video therefore creates a complete pack for that video. Folder names in `centerlongest` have whitespace and reserved punctuation replaced with underscores.
 
-PNG sheets use the 5.1 layout: 16 small thumbnails and 5 larger thumbnails, with all 5 larger slots animated in animated sheets. The default sheet is 1492 × 970 pixels; taller logos increase its height. Longest previews are fitted into 960 × 540, and `screen.png` uses the decoded frame's original dimensions. No promotional footer is added.
+PNG sheets use the 5.2 layout: 16 small thumbnails and 5 larger thumbnails, with all 5 larger slots animated in animated sheets. The default sheet is 1492 × 960 pixels; taller logos increase its height. Longest previews are fitted into 960 × 540, and `screen.png` uses the decoded frame's original dimensions. No promotional footer is added.
 
 The CLI defaults to **no logo**, so normal runs work offline. Use `--logo` to select branding. Settings are passed on the command line; no separate settings file is saved. Linux's DejaVu font differs from the Windows GUI's Trebuchet font, so text appearance will differ slightly.
 
