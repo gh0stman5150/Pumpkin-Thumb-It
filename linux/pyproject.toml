@@ -4,9 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pumpkins-thumb-it"
-version = "5.2.0"
+dynamic = ["version"]
 description = "Pumpkin's Thumb It 5.2: video thumbnail sheets and animated previews from the terminal"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [{name = "PumpkinPounder"}]
 dependencies = ["Pillow>=10.4,<13"]
@@ -19,3 +21,6 @@ Repository = "https://github.com/PumpkinPounder/Pumpkin-Thumb-It"
 
 [tool.setuptools.packages.find]
 include = ["thumb_it*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "thumb_it.__version__"}

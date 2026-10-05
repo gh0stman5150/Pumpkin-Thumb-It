@@ -196,7 +196,7 @@ def process(groups, args, report):
 
     runner = Runner(args.ffmpeg, args.ffprobe, args.timeout)
     settings = Settings(args.speed, args.seconds, args.fps, int(args.max_webp_mib * 1048576),
-                        args.logo, args.logo_width, args.logo_height, args.font, args.format)
+                        args.logo, args.logo_width, args.logo_height, args.font, args.format, not args.sheets_only)
     renderer = Renderer(runner, settings)
     previous_term = signal.getsignal(signal.SIGTERM)
     signal.signal(signal.SIGTERM, lambda *_: runner.stopped.set())

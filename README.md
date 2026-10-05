@@ -4,6 +4,18 @@
 ![Platform](https://img.shields.io/badge/Platform-Windows_GUI_%7C_Linux_CLI-lightgrey)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
+## 📚 Documentation
+
+| | |
+|---|---|
+| [⚙️ Architecture](docs/architecture.md) | System design, components and flow |
+| [📁 Structure](docs/structure.md) | Project organization and responsibilities |
+| [🚀 Installation](docs/installation.md) | Requirements and steps to run the GUI and the CLI |
+| [🧠 Technical decisions](docs/decisions.md) | Trade-offs and design justifications |
+| [📖 Usage guide](docs/usage.md) | Workflows, outputs and examples |
+| [🔌 CLI reference](docs/api.md) | Commands, options, exit codes and output names |
+| [🧪 Testing](docs/testing.md) | How to run the CLI tests and what CI checks |
+
 > Video thumbnail sheets and animated previews, made fast.
 
 > Support the project: [Buy Me a Coffee](https://buymeacoffee.com/pumpkinpounder)
@@ -349,11 +361,13 @@ The ETA becomes more accurate as more files complete.
 
 The app has three speed profiles.
 
-| Mode | Description |
-| --- | --- |
-| Normal | Best visual quality |
-| Fast | Balanced speed and quality |
-| Fastest | Quickest processing |
+| Mode | Description | WebP encoder method | AVIF encoder speed |
+| --- | --- | --- | --- |
+| Normal | Best compression and visual quality, slowest | 6 | 4 |
+| Fast | Balanced speed and quality | 3 | 6 |
+| Fastest | Quickest processing | 1 | 8 |
+
+The profile also sets the starting WebP quality (85, 75 and 70) and the number of videos processed in parallel. WebP quality is capped at 75 by proxy-safe mode, so Normal and Fast start at the same quality. Each animation is then searched for the highest quality that fits under the size limit (see **WEBP Output Is Too Large**).
 
 ---
 
@@ -367,9 +381,9 @@ The app includes several performance-focused features:
 - OpenCV optimisations
 - FFmpeg fallback extraction
 - WMV fallback handling
-- Proxy-safe WEBP settings
-- WEBP file size limiting
-- Automatic quality reduction for large WEBP files
+- Proxy-safe WEBP settings (quality capped at 75, 960 x 540 longest-video clip)
+- WEBP and AVIF file size limiting
+- Quality search that keeps the highest quality that fits under the size limit
 - Faster animated WEBP clip extraction
 - Shadow-free thumbnail rendering for extra speed
 
@@ -530,6 +544,8 @@ centerlongest_FolderName.webp
 screen.png
 ```
 
+With **Animation: AVIF** selected, the `center*` and `centerlongest_*` files are `.avif` instead of `.webp`. PNG sheets and `screen.png` do not change.
+
 ---
 
 # Stop Processing
@@ -590,8 +606,15 @@ CENTERLONGEST_FPS = 12
 MAX_WEBP_BYTES = 5 * 1024 * 1024
 MIN_WEBP_QUALITY = 25
 
+AVIF_START_QUALITY = 90
+AVIF_MIN_QUALITY = 20
+
+FOOTER_BAR_HEIGHT = 34
+
 PNG_COMPRESS_LEVEL = 6
 ```
+
+`ANIM_FORMAT`, `FOOTER_HEIGHT` and `FOOTER_TEXT` are set from the **Animation** dropdown and **Footer** toggle each time you press **Generate Thumbnails**, so editing them in the script has no effect.
 
 ---
 
@@ -638,13 +661,13 @@ Check that:
 
 ## WEBP Output Is Too Large
 
-The app automatically reduces WEBP quality until it fits under the configured limit:
+The app searches for the highest quality (down to a floor of 25 for WebP, 20 for AVIF) whose output fits under the configured limit:
 
 ```python
 MAX_WEBP_BYTES = 5 * 1024 * 1024
 ```
 
-You can increase that value if your site allows larger WEBP files.
+You can increase that value if your site allows larger files. If even the floor quality is over the limit, the GUI keeps the floor-quality file; lower `ANIM_SECONDS` or `ANIM_FPS` to shrink it.
 
 ## App Feels Slow
 
@@ -665,7 +688,8 @@ The Linux edition is included directly in the repository's `main` branch under [
 linux/
 ├── README.md
 ├── pyproject.toml
-└── thumb_it/
+├── thumb_it/
+└── tests/        (developer tests; not installed with the package)
 ```
 
 Open the [`linux` folder](linux/) and follow its **[installation instructions and full command reference](linux/README.md)**.

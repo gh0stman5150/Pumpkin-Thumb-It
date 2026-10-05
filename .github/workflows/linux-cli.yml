@@ -3,13 +3,17 @@ name: Linux CLI
 on:
   push:
     branches: [main, 'codex/**']
-    paths: ['linux/**', 'README.md', '.github/workflows/linux-cli.yml']
+    paths: ['linux/**', 'docs/**', 'README.md', '.github/workflows/linux-cli.yml']
   pull_request:
-    paths: ['linux/**', 'README.md', '.github/workflows/linux-cli.yml']
+    paths: ['linux/**', 'docs/**', 'README.md', '.github/workflows/linux-cli.yml']
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   ubuntu:
@@ -51,13 +55,27 @@ jobs:
           thumb-it --help
           thumb-it --version
           thumb-it doctor
-      - name: Run tests (includes a real FFmpeg end-to-end run)
-        run: python -m unittest discover -s tests -v
+      - name: Run tests against the installed wheel (real FFmpeg end-to-end runs included)
+        env:
+          REQUIRE_FFMPEG: '1'
+          REQUIRE_GUI_TESTS: '1'
+          THUMB_IT_REPO: ${{ github.workspace }}
+        run: |
+          # Run from a copy outside linux/ so the tests import the installed wheel, not the source tree.
+          rm -rf "$RUNNER_TEMP/tests" && cp -r tests "$RUNNER_TEMP/tests"
+          cd "$RUNNER_TEMP"
+          python -c "import thumb_it; print(thumb_it.__file__); assert 'site-packages' in thumb_it.__file__"
+          python -m unittest discover -s tests -v
       - name: Exercise the minimum supported Pillow version
         if: matrix.python == '3.10'
+        env:
+          REQUIRE_FFMPEG: '1'
+          REQUIRE_GUI_TESTS: '1'
+          THUMB_IT_REPO: ${{ github.workspace }}
         run: |
           python -m pip install Pillow==10.4.0
           thumb-it doctor
+          cd "$RUNNER_TEMP"
           python -m unittest discover -s tests -v
       - name: Verify README pipx installation
         run: |
@@ -68,11 +86,11 @@ jobs:
           "$HOME/.local/bin/thumb-it" doctor
           /usr/bin/pipx uninstall pumpkins-thumb-it
       - name: Save distributable package
-        if: always()
+        if: success() && matrix.os == 'ubuntu-24.04' && matrix.python == '3.12'
         uses: actions/upload-artifact@v7
         with:
-          name: thumb-it-${{ matrix.os }}-python-${{ matrix.python }}
-          include-hidden-files: true
+          name: thumb-it-wheel
+          retention-days: 7
           path: linux/dist/
 
   debian:
@@ -99,12 +117,13 @@ jobs:
       - name: Check installed command outside the checkout
         working-directory: /tmp
         run: thumb-it doctor
-      - name: Run tests (includes a real FFmpeg end-to-end run)
-        run: python -m unittest discover -s tests -v
-      - name: Save distributable package
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: thumb-it-debian-12-python-3.11
-          include-hidden-files: true
-          path: linux/dist/
+      - name: Run tests against the installed wheel (real FFmpeg end-to-end runs included)
+        env:
+          REQUIRE_FFMPEG: '1'
+          REQUIRE_GUI_TESTS: '1'
+          THUMB_IT_REPO: ${{ github.workspace }}
+        run: |
+          rm -rf /tmp/tests && cp -r tests /tmp/tests
+          cd /tmp
+          python -c "import thumb_it; print(thumb_it.__file__); assert 'site-packages' in thumb_it.__file__"
+          python -m unittest discover -s tests -v

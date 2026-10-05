@@ -17,7 +17,8 @@ Folder contents:
 linux/
 ├── README.md
 ├── pyproject.toml
-└── thumb_it/
+├── thumb_it/
+└── tests/        (developer tests; not installed with the package)
 ```
 
 Open a terminal in the `linux` folder before running the installation commands below.
@@ -128,7 +129,7 @@ Supported extensions, case-insensitively: `.mp4`, `.m4v`, `.mkv`, `.mov`, `.avi`
 
 ## Output Behaviour
 
-By default, the CLI creates `sheet_<video-name>.png` for every selected video. The first five selected videos in each folder, ordered by case-insensitive filename, receive `center1.webp` through `center5.webp`. The longest selected readable video in that folder supplies `centerlongest_<folder-name>.webp` and `screen.png`. Selecting a single video therefore creates a complete pack for that video. Folder names in `centerlongest` have whitespace and reserved punctuation replaced with underscores.
+By default, the CLI creates `sheet_<video-name>.png` for every selected video. The first five selected videos in each folder, ordered by case-insensitive filename, receive `center1.webp` through `center5.webp`. The longest selected readable video in that folder supplies `centerlongest_<folder-name>.webp` and `screen.png`. Selecting a single video therefore creates a complete pack for that video. Folder names in `centerlongest` have whitespace and reserved punctuation replaced with underscores. With `--format avif`, the `center1`–`center5` and `centerlongest` files use the `.avif` extension instead of `.webp`.
 
 PNG sheets use the 5.2 layout: 16 small thumbnails and 5 larger thumbnails, with all 5 larger slots animated in animated sheets. The default sheet is 1492 × 960 pixels; taller logos increase its height. Longest previews are fitted into 960 × 540, and `screen.png` uses the decoded frame's original dimensions. No promotional footer is added.
 

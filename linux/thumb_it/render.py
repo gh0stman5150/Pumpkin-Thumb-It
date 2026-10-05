@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import os
 import random
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -42,6 +44,7 @@ class Settings:
     logo_height: int = 120
     font: str | None = None
     format: str = "webp"  # animated output format: webp or avif
+    animations: bool = True  # False for --sheets-only: skip WebP/AVIF capability checks
 
 
 def choose_font(configured: str | None = None):
@@ -67,6 +70,7 @@ def check_webp():
 
 
 LOGO_MAX_BYTES = 20 * 1024 * 1024
+LOGO_MAX_PIXELS = 64_000_000
 UMASK = os.umask(0)  # read once at import; os.umask is process-wide and not thread-safe
 os.umask(UMASK)
 
@@ -106,16 +110,26 @@ def load_logo(source: str | None, max_w: int, max_h: int):
         if source.lower().startswith(("http://", "https://")):
             request = urllib.request.Request(source, headers={"User-Agent": "Pumpkins-Thumb-It/5.2"})
             opener = urllib.request.build_opener(_WebRedirects)
+            data = bytearray()
+            deadline = time.monotonic() + 30  # total download limit; timeout= only bounds each socket read
             with opener.open(request, timeout=15) as response:
-                data = response.read(LOGO_MAX_BYTES + 1)
+                while len(data) <= LOGO_MAX_BYTES:
+                    chunk = response.read(65536)
+                    if not chunk:
+                        break
+                    data.extend(chunk)
+                    if time.monotonic() > deadline:
+                        raise ValueError("download took too long")
             if len(data) > LOGO_MAX_BYTES:
                 raise ValueError("logo exceeds 20 MiB")
-            handle = BytesIO(data)
+            handle = BytesIO(bytes(data))
         else:
             handle = Path(source).expanduser()
             if handle.stat().st_size > LOGO_MAX_BYTES:
                 raise ValueError("logo exceeds 20 MiB")
         with Image.open(handle) as image:
+            if image.width * image.height > LOGO_MAX_PIXELS:
+                raise ValueError("logo has too many pixels")
             logo = image.convert("RGBA")
         logo.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
         return logo
@@ -143,19 +157,28 @@ def layout(header_height: int):
     return slots, y + SMALL_H + SPACING
 
 
-def paste_slot(sheet, thumb, slot):
-    x, y, width, height, big = slot
-    thumb = thumb.resize((width, height), Image.Resampling.LANCZOS).convert("RGBA")
+@functools.lru_cache(maxsize=None)
+def _slot_art(width, height, big):
+    """Rounded mask and blurred shadow layer for a slot size; the same for every frame, so cached."""
     mask = Image.new("L", (width, height), 0)
     ImageDraw.Draw(mask).rounded_rectangle((0, 0, width, height), radius=28 if big else 18, fill=255)
-    thumb.putalpha(mask)
     # Preserve the rounded, shadowed thumbnail treatment from the 5.1 renderer.
     shadow = Image.new("RGBA", (width, height), (0, 0, 0, 120))
     shadow.putalpha(mask)
     shadow = shadow.filter(ImageFilter.GaussianBlur(radius=10))
-    layer = Image.new("RGBA", sheet.size)
-    layer.paste(shadow, (x, y + 4), shadow)
-    sheet.alpha_composite(layer)
+    layer = Image.new("RGBA", (width, height))
+    layer.paste(shadow, (0, 0), shadow)
+    return mask, layer
+
+
+def paste_slot(sheet, thumb, slot):
+    x, y, width, height, big = slot
+    if thumb.size != (width, height):
+        thumb = thumb.resize((width, height), Image.Resampling.LANCZOS)
+    thumb = thumb.convert("RGBA")
+    mask, shadow = _slot_art(width, height, big)
+    thumb.putalpha(mask)
+    sheet.alpha_composite(shadow, dest=(x, y + 4))
     sheet.paste(thumb, (x, y), thumb)
 
 
@@ -169,9 +192,10 @@ class Renderer:
     def __init__(self, runner: Runner, settings: Settings):
         self.runner, self.settings = runner, settings
         self.font, self.font_path = choose_font(settings.font)
-        check_webp()
-        if settings.format == "avif":
-            check_avif()
+        if settings.animations:
+            check_webp()
+            if settings.format == "avif":
+                check_avif()
         self.logo = load_logo(settings.logo, settings.logo_width, settings.logo_height)
         self.header_height = max(146, self.logo.height + 20 if self.logo else 0)
         self.slots, self.sheet_height = layout(self.header_height)
@@ -274,7 +298,8 @@ class Renderer:
             sheet = base.copy()
             for slot, clip in zip(big_slots, clips):
                 paste_slot(sheet, clip[frame_index], slot)
-            frames.append(sheet)
+                clip[frame_index] = None  # release the decoded frame once it is composited
+            frames.append(sheet.convert("RGB"))  # opaque; RGB is smaller and faster to encode
         return frames
 
     def center(self, video: Video):
@@ -303,10 +328,10 @@ class Renderer:
             return buffer.getvalue()
 
         data = encode(quality)
-        if len(data) <= limit or quality <= floor:
-            if len(data) > limit:
-                raise MediaError(self._too_big(name))
+        if len(data) <= limit:
             return data
+        if quality <= floor:
+            raise MediaError(self._too_big(name))
         best = encode(floor)
         if len(best) > limit:
             raise MediaError(self._too_big(name))
@@ -359,12 +384,13 @@ def valid_existing(path: Path):
         raise MediaError(f"Output path is not a file: {path}")
     try:
         with Image.open(path) as image:
-            expected = {".webp": "WEBP", ".avif": "AVIF"}.get(path.suffix, "PNG")
+            expected = {".webp": "WEBP", ".avif": "AVIF"}.get(path.suffix.lower(), "PNG")
             if image.format != expected:
                 raise ValueError(f"expected {expected}")
             image.verify()
         with Image.open(path) as image:
-            for index in range(getattr(image, "n_frames", 1)):
+            # First and last frame: catches truncated files without decoding a whole animation.
+            for index in sorted({0, getattr(image, "n_frames", 1) - 1}):
                 image.seek(index)
                 image.load()
     except Exception as exc:

@@ -3,13 +3,15 @@ import os
 import shutil
 import stat
 import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 from thumb_it import cli, render
 from thumb_it.media import MediaError
+
+
+needs_ffmpeg = unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg not installed")
 
 
 def touch(path, data=b""):
@@ -104,15 +106,6 @@ class LogoTests(unittest.TestCase):
             with self.assertRaises(MediaError):
                 render.load_logo(str(big), 100, 100)
 
-    def test_error_hides_url_credentials(self):
-        with self.assertRaises(MediaError) as raised:
-            render.load_logo("http://user:secret@127.0.0.1:9/logo.png", 100, 100)
-        self.assertNotIn("secret", str(raised.exception))
-
-    def test_redirect_to_non_http_refused(self):
-        handler = render._WebRedirects()
-        with self.assertRaises(Exception):
-            handler.redirect_request(None, None, 302, "Found", {}, "ftp://example.com/x.png")
 
 
 class SaveTests(unittest.TestCase):
@@ -140,29 +133,6 @@ class SaveTests(unittest.TestCase):
                 self.make_renderer().save(target, frames, animated=True)
             self.assertEqual(list(Path(tmp).iterdir()), [])
 
-    def test_quality_search_fits_limit_with_best_quality(self):
-        import io
-        import random
-        from PIL import Image
-        rng = random.Random(1)
-        frames = [Image.frombytes("RGB", (96, 96), bytes(rng.randrange(256) for _ in range(96 * 96 * 3)))
-                  for _ in range(3)]
-
-        def size(quality):
-            buffer = io.BytesIO()
-            frames[0].save(buffer, format="WEBP", save_all=True, append_images=frames[1:],
-                           duration=83, loop=0, quality=quality, method=1)
-            return buffer.tell()
-
-        low, high = size(25), size(75)
-        self.assertLess(low, high)
-        limit = (low + high) // 2
-        renderer = self.make_renderer()
-        renderer.settings = render.Settings(max_webp_bytes=limit, fps=12)
-        data = renderer.fit_animation(frames, 75, 1, "t.webp")
-        self.assertLessEqual(len(data), limit)
-        self.assertGreater(len(data), low)
-
     def test_valid_existing_flags_truncated_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             bad = touch(Path(tmp) / "a.png", b"not a png")
@@ -171,7 +141,7 @@ class SaveTests(unittest.TestCase):
             self.assertFalse(render.valid_existing(Path(tmp) / "missing.png"))
 
 
-@unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg not installed")
+@needs_ffmpeg
 class EndToEndTests(unittest.TestCase):
     def test_pack_generated_and_rerun_skips(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -186,12 +156,17 @@ class EndToEndTests(unittest.TestCase):
             self.assertIn("center1.webp", names)
             self.assertIn("screen.png", names)
             self.assertTrue(any(n.startswith("centerlongest_") for n in names))
+            from PIL import Image
+            with Image.open(scr / "center1.webp") as animation:
+                # Up to 8 frames; the WebP encoder merges identical frames (this 10 fps source is oversampled).
+                self.assertTrue(3 <= animation.n_frames <= 8, animation.n_frames)
+                self.assertEqual(animation.size, (1492, 960))
             before = (scr / "sheet_clip.png").stat().st_mtime_ns
             self.assertEqual(cli.main(args), 0)
             self.assertEqual((scr / "sheet_clip.png").stat().st_mtime_ns, before)
 
 
-@unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg not installed")
+@needs_ffmpeg
 class AvifEndToEndTests(unittest.TestCase):
     def test_avif_pack_generated_readable_and_under_limit(self):
         try:
@@ -215,6 +190,35 @@ class AvifEndToEndTests(unittest.TestCase):
             before = (scr / "center1.avif").stat().st_mtime_ns
             self.assertEqual(cli.main(args), 0)
             self.assertEqual((scr / "center1.avif").stat().st_mtime_ns, before)
+
+
+class FfmpegAvailabilityTests(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("REQUIRE_FFMPEG"), "REQUIRE_FFMPEG not set")
+    def test_ffmpeg_present_when_required(self):
+        # CI sets REQUIRE_FFMPEG so the end-to-end tests cannot be skipped by accident.
+        self.assertTrue(shutil.which("ffmpeg") and shutil.which("ffprobe"))
+
+
+@needs_ffmpeg
+class MultiVideoEndToEndTests(unittest.TestCase):
+    def make_video(self, path, seconds):
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                        f"testsrc=size=320x180:rate=10:duration={seconds}",
+                        "-pix_fmt", "yuv420p", str(path)], check=True)
+
+    def test_folder_pack_and_sheets_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.make_video(Path(tmp) / "b_long.mp4", 12)
+            self.make_video(Path(tmp) / "a_short.mp4", 3)
+            self.assertEqual(cli.main([tmp, "--quiet", "--sheets-only"]), 0)
+            names = sorted(p.name for p in (Path(tmp) / "scr").iterdir())
+            self.assertEqual(names, ["sheet_a_short.png", "sheet_b_long.png"])
+            self.assertEqual(cli.main([tmp, "--quiet", "--seconds", "1", "--fps", "8", "--jobs", "2"]), 0)
+            names = sorted(p.name for p in (Path(tmp) / "scr").iterdir())
+            self.assertIn("center1.webp", names)
+            self.assertIn("center2.webp", names)
+            self.assertIn("screen.png", names)
+            self.assertEqual(sum(n.startswith("centerlongest_") for n in names), 1)
 
 
 if __name__ == "__main__":

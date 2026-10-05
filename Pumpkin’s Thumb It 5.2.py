@@ -1,6 +1,8 @@
 import os
 import re
 import hashlib
+import functools
+import tempfile
 import cv2
 import json
 import threading
@@ -218,6 +220,7 @@ def _safe_tag(name: str) -> str:
     name = re.sub(r"\s+", "_", name)
     return name[:80]
 
+@functools.lru_cache(maxsize=None)
 def _try_load_font(size):
     try:
         return ImageFont.truetype(FONT_PATH, size)
@@ -237,6 +240,9 @@ def format_time_hhmmss(seconds: float) -> str:
     s = int(seconds % 60)
     return f"{h:02d}:{m:02d}:{s:02d}"
 
+LOGO_MAX_BYTES = 20 * 1024 * 1024
+LOGO_MAX_PIXELS = 64_000_000
+
 def load_logo_from_source(source, max_w, max_h):
     source = str(source or "").strip().strip('"')
     if not source or "PUT_YOUR_LOGO_URL_HERE" in source:
@@ -244,14 +250,30 @@ def load_logo_from_source(source, max_w, max_h):
 
     try:
         if re.match(r"^https?://", source, flags=re.IGNORECASE):
-            resp = requests.get(source, timeout=10)
-            resp.raise_for_status()
-            logo = Image.open(BytesIO(resp.content)).convert("RGBA")
+            with requests.get(source, timeout=(5, 10), stream=True) as resp:
+                resp.raise_for_status()
+                length = resp.headers.get("Content-Length")
+                if length and length.isdigit() and int(length) > LOGO_MAX_BYTES:
+                    raise ValueError("logo too large")
+                data = bytearray()
+                deadline = time.monotonic() + 30
+                for chunk in resp.iter_content(65536):
+                    data.extend(chunk)
+                    if len(data) > LOGO_MAX_BYTES:
+                        raise ValueError("logo too large")
+                    if time.monotonic() > deadline:
+                        raise ValueError("logo download took too long")
+            handle = BytesIO(bytes(data))
         else:
             source = os.path.expanduser(source)
-            if not os.path.isfile(source):
+            if not os.path.isfile(source) or os.path.getsize(source) > LOGO_MAX_BYTES:
                 return None
-            logo = Image.open(source).convert("RGBA")
+            handle = source
+
+        with Image.open(handle) as opened:
+            if opened.width * opened.height > LOGO_MAX_PIXELS:
+                raise ValueError("logo has too many pixels")
+            logo = opened.convert("RGBA")
 
         max_w = int(max_w)
         max_h = int(max_h)
@@ -283,19 +305,24 @@ def _stable_seed(video_path):
     # hash() is salted per process; use a digest so frame choices are reproducible.
     return int.from_bytes(hashlib.sha256(str(video_path).encode("utf-8", "surrogatepass")).digest()[:4], "big")
 
+class AnimationTooLarge(Exception):
+    pass
+
 def _fit_webp_quality(encode, max_bytes, q_start, q_min):
     """Binary-search the highest quality in [q_min, q_start] whose encode(q) fits max_bytes.
 
-    Returns the encoded bytes. If even q_min does not fit, returns the q_min result.
+    Returns the encoded bytes. Raises AnimationTooLarge if even q_min does not fit.
     """
     q_min = int(q_min)
     q_start = max(int(q_start), q_min)
     data = encode(q_start)
-    if len(data) <= max_bytes or q_start <= q_min:
+    if len(data) <= max_bytes:
         return data
+    if q_start <= q_min:
+        raise AnimationTooLarge(f"output is {len(data) / 1048576:.1f} MiB at quality {q_min}, over the {max_bytes / 1048576:g} MiB limit")
     best = encode(q_min)
     if len(best) > max_bytes:
-        return best
+        raise AnimationTooLarge(f"output is {len(best) / 1048576:.1f} MiB at quality {q_min}, over the {max_bytes / 1048576:g} MiB limit")
     lo, hi = q_min, q_start
     while hi - lo > 1:
         mid = (lo + hi) // 2
@@ -327,7 +354,7 @@ def _avif_supported():
 
 def _encode_animation_bytes(frames, fps, quality, cfg):
     buf = BytesIO()
-    duration = int(1000 / fps)
+    duration = round(1000 / fps)
     if ANIM_FORMAT == "avif":
         frames[0].save(
             buf, format="AVIF", save_all=True, append_images=frames[1:],
@@ -348,11 +375,43 @@ def _animation_quality_range(cfg, requested=None):
     q = int(requested or cfg.get("WEBP_QUALITY", 80) or 80)
     return min(q, int(PROXY_SAFE_WEBP_QUALITY_CAP)), int(MIN_WEBP_QUALITY)
 
+_UMASK = os.umask(0)  # read once at import; os.umask is process-wide
+os.umask(_UMASK)
+_FAILURE_SINK = None
+
+def set_failure_sink(fn):
+    global _FAILURE_SINK
+    _FAILURE_SINK = fn
+
+def _report_failure(label, exc):
+    """Log why an output was not produced (a user Stop is not a failure)."""
+    if STOP_EVENT.is_set():
+        return
+    sink = _FAILURE_SINK
+    if sink:
+        try:
+            sink(f"{label} failed: {exc}")
+        except Exception:
+            pass
+
 def _write_bytes_atomic(path, data):
-    tmp = path + ".part"
-    with open(tmp, "wb") as fh:
-        fh.write(data)
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.", suffix=".part", dir=os.path.dirname(path) or ".")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.chmod(tmp, 0o666 & ~_UMASK)  # mkstemp creates 0600; honour the umask like a normal write
+        except OSError:
+            pass
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 def get_banner_height():
     """
@@ -364,7 +423,7 @@ def get_banner_height():
     right_stack_h = (logo_h or 0) + (len(HEADER_RIGHT_LINES) * 21) + 20
     return int(max(BANNER_HEIGHT, text_h, right_stack_h, logo_h + 18))
 
-def get_video_info(video_path):
+def _probe_video_info(video_path):
     cmd = [
         FFPROBE,
         "-v", "error",
@@ -376,7 +435,7 @@ def get_video_info(video_path):
         video_path
     ]
     try:
-        out = subprocess.check_output(cmd, stderr=subprocess.STDOUT).decode("utf-8", errors="ignore")
+        out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, timeout=60).decode("utf-8", errors="ignore")
         data = json.loads(out)
     except Exception:
         return {
@@ -514,13 +573,33 @@ def _stamp_timestamp(pil_img: Image.Image, time_sec: float) -> Image.Image:
 
     return img.convert("RGB")
 
+_INFO_CACHE = {}
+_INFO_LOCK = threading.Lock()
+
+def get_video_info(video_path):
+    """ffprobe results cached per file (path, mtime, size); failed probes are not cached."""
+    try:
+        st = os.stat(video_path)
+        key = (video_path, st.st_mtime_ns, st.st_size)
+    except OSError:
+        return _probe_video_info(video_path)
+    with _INFO_LOCK:
+        hit = _INFO_CACHE.get(key)
+    if hit is not None:
+        return dict(hit)
+    info = _probe_video_info(video_path)
+    if float(info.get("duration") or 0.0) > 0:
+        with _INFO_LOCK:
+            _INFO_CACHE[key] = dict(info)
+    return info
+
 def _ffmpeg_extract_frame_pil_scaled(video_path: str, time_sec: float, out_w: int, out_h: int):
     vf = (
         f"scale=w={out_w}:h={out_h}:force_original_aspect_ratio=decrease,"
         f"pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2"
     )
     cmds = [
-        [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin",
+        [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-threads", "1",
          "-ss", str(float(time_sec)), "-i", video_path,
          "-frames:v", "1", "-vf", vf,
          "-f", "image2pipe", "-vcodec", "png", "pipe:1"],
@@ -892,6 +971,17 @@ def _rounded_mask(size, radius):
     d.rounded_rectangle([0, 0, w, h], radius=radius, fill=255)
     return mask
 
+@functools.lru_cache(maxsize=None)
+def _slot_mask_and_shadow(w, h, radius):
+    """Rounded mask and blurred shadow layer for a slot size; identical for every frame, so cached."""
+    mask = _rounded_mask((w, h), radius)
+    shadow = Image.new("RGBA", (w, h), (0, 0, 0, int(SHADOW_ALPHA)))
+    shadow.putalpha(mask)
+    shadow = shadow.filter(ImageFilter.GaussianBlur(radius=int(SHADOW_BLUR)))
+    layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    layer.paste(shadow, (0, 0), shadow)
+    return mask, layer
+
 def _paste_thumb_in_slot(sheet_rgba: Image.Image, thumb_pil: Image.Image, slot: dict):
     """
     - No borders / white boxes
@@ -900,12 +990,13 @@ def _paste_thumb_in_slot(sheet_rgba: Image.Image, thumb_pil: Image.Image, slot: 
     """
     x, y, w, h = slot["x"], slot["y"], slot["w"], slot["h"]
 
-    thumb = thumb_pil.resize((w, h), Image.LANCZOS).convert("RGBA")
+    thumb = thumb_pil if thumb_pil.size == (w, h) else thumb_pil.resize((w, h), Image.LANCZOS)
+    thumb = thumb.convert("RGBA")
 
     if ROUNDED_CORNERS:
         radius = ROUND_RADIUS_BIG if slot.get("is_big") else ROUND_RADIUS_SMALL
         radius = max(1, int(radius))
-        mask = _rounded_mask((w, h), radius)
+        mask, shadow_layer = _slot_mask_and_shadow(w, h, radius)
         thumb.putalpha(mask)
     else:
         mask = None
@@ -913,14 +1004,8 @@ def _paste_thumb_in_slot(sheet_rgba: Image.Image, thumb_pil: Image.Image, slot: 
     if SHADOW_ENABLED and mask is not None:
         sx = x + int(SHADOW_OFFSET[0])
         sy = y + int(SHADOW_OFFSET[1])
-
-        shadow = Image.new("RGBA", (w, h), (0, 0, 0, int(SHADOW_ALPHA)))
-        shadow.putalpha(mask)
-        shadow = shadow.filter(ImageFilter.GaussianBlur(radius=int(SHADOW_BLUR)))
-
-        tmp = Image.new("RGBA", sheet_rgba.size, (0, 0, 0, 0))
-        tmp.paste(shadow, (sx, sy), shadow)
-        sheet_rgba.alpha_composite(tmp)
+        sheet_rgba.alpha_composite(shadow_layer, dest=(max(0, sx), max(0, sy)),
+                                   source=(max(0, -sx), max(0, -sy)))
 
     sheet_rgba.paste(thumb, (x, y), thumb)
 
@@ -1052,6 +1137,65 @@ def _clip_ranges_for_sheet(duration_sec, sheet_index):
 
     return ranges
 
+def _run_capture(cmd, timeout):
+    """Run a command, returning (returncode, stdout); honours the Stop button and a total timeout."""
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            out, _ = p.communicate(timeout=0.5)
+            return p.returncode, out
+        except subprocess.TimeoutExpired:
+            stopped = STOP_EVENT.is_set()
+            if stopped or time.monotonic() > deadline:
+                p.kill()
+                p.communicate()
+                raise RuntimeError("stopped" if stopped else "ffmpeg timed out")
+
+def _decode_clip_frames(video_path, start, seconds, count, w, h):
+    """Decode `count` frames spanning `seconds` from `start`, scaled and padded to w x h, with one ffmpeg call."""
+    vf = (
+        f"scale=w={int(w)}:h={int(h)}:force_original_aspect_ratio=decrease,"
+        f"pad={int(w)}:{int(h)}:(ow-iw)/2:(oh-ih)/2"
+    )
+    fps = (count - 1) / max(0.001, seconds)
+    step = 1.0 / fps
+    cmd = [
+        FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-threads", "1",
+        "-ss", str(float(start)), "-i", video_path,
+        "-t", f"{seconds + step * 0.5:.4f}",
+        "-vf", f"{vf},fps={fps:.6f}", "-filter_threads", "1",
+        "-an", "-frames:v", str(int(count)), "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
+    ]
+    code, raw = _run_capture(cmd, timeout=max(120, int(seconds * 20)))
+    size = int(w) * int(h) * 3
+    if code != 0 or len(raw) < size:
+        return []
+    return [Image.frombytes("RGB", (int(w), int(h)), raw[i:i + size]) for i in range(0, len(raw) - size + 1, size)]
+
+def _slot_clip_frames(video_path, ts_list, w, h):
+    """One frame per timestamp for a big slot. One ffmpeg decode per clip; falls back to per-frame grabs."""
+    count = len(ts_list)
+    span = ts_list[-1] - ts_list[0] if count > 1 else 0.0
+    frames = []
+    if count > 1 and span >= 0.25:
+        frames = _decode_clip_frames(video_path, ts_list[0], span, count, w, h)
+    if len(frames) >= 2:
+        frames = frames[:count]
+        while len(frames) < count:
+            frames.append(frames[-1])
+        return frames
+
+    out = []
+    for t in ts_list:
+        if STOP_EVENT.is_set():
+            raise RuntimeError("stopped")
+        img = _ffmpeg_extract_frame_pil_scaled(video_path, t, w, h)
+        out.append(img if img is not None else _make_black_frame(w, h))
+    return out
+
+ANIM_BUILD_SEMAPHORE = threading.Semaphore(2)  # bounds frame memory when several animated sheets build at once
+
 def create_animated_sheet_webp(video_path, base_sheet_header_footer_rgba, slots, cfg, anim_index):
     """
     center1.webp .. center5.webp:
@@ -1111,46 +1255,52 @@ def create_animated_sheet_webp(video_path, base_sheet_header_footer_rgba, slots,
             img, _t = still_map.get(id(s), (_make_black_frame(s["w"], s["h"]), 0.0))
             _paste_thumb_in_slot(base_sheet, img, s)
 
-        frames = []
-        for fi in range(frame_count):
-            if STOP_EVENT.is_set():
+        with ANIM_BUILD_SEMAPHORE:
+            slot_clips = [
+                _slot_clip_frames(video_path, big_ts_lists[slot_i], big_slots[slot_i]["w"], big_slots[slot_i]["h"])
+                for slot_i in range(5)
+            ]
+
+            frames = []
+            for fi in range(frame_count):
+                if STOP_EVENT.is_set():
+                    return None
+                frame_sheet = base_sheet.copy()
+
+                for slot_i in range(5):
+                    slot = big_slots[slot_i]
+                    t = big_ts_lists[slot_i][fi]
+                    img = slot_clips[slot_i][fi]
+                    slot_clips[slot_i][fi] = None  # release the decoded frame once it is composited
+
+                    try:
+                        img = _stamp_timestamp(img, t)
+                    except Exception:
+                        pass
+
+                    _paste_thumb_in_slot(frame_sheet, img, slot)
+
+                frames.append(frame_sheet.convert("RGB"))
+            del slot_clips
+
+            if len(frames) < 2:
                 return None
-            frame_sheet = base_sheet.copy()
 
-            for slot_i in range(5):
-                slot = big_slots[slot_i]
-                t = big_ts_lists[slot_i][fi]
+            q = cfg["WEBP_QUALITY"] if ANIM_WEBP_QUALITY is None else int(ANIM_WEBP_QUALITY)
+            q = int(q) if q else 80
+            q_start, q_min = _animation_quality_range(cfg, q)
 
-                img = _ffmpeg_extract_frame_pil_scaled(video_path, t, slot["w"], slot["h"])
-                if img is None:
-                    img = _make_black_frame(slot["w"], slot["h"])
+            def encode(quality):
+                if STOP_EVENT.is_set():
+                    raise RuntimeError("stopped")
+                return _encode_animation_bytes(frames, webp_fps, quality, cfg)
 
-                try:
-                    img = _stamp_timestamp(img, t)
-                except Exception:
-                    pass
-
-                _paste_thumb_in_slot(frame_sheet, img, slot)
-
-            frames.append(frame_sheet)
-
-        if len(frames) < 2:
-            return None
-
-        q = cfg["WEBP_QUALITY"] if ANIM_WEBP_QUALITY is None else int(ANIM_WEBP_QUALITY)
-        q = int(q) if q else 80
-        q_start, q_min = _animation_quality_range(cfg, q)
-
-        def encode(quality):
-            if STOP_EVENT.is_set():
-                raise RuntimeError("stopped")
-            return _encode_animation_bytes(frames, webp_fps, quality, cfg)
-
-        data = _fit_webp_quality(encode, int(MAX_WEBP_BYTES), q_start, q_min)
-        _write_bytes_atomic(out_path, data)
+            data = _fit_webp_quality(encode, int(MAX_WEBP_BYTES), q_start, q_min)
+            _write_bytes_atomic(out_path, data)
 
         return out_path
-    except Exception:
+    except Exception as exc:
+        _report_failure(f"Animated sheet {ANIM_NAME_PREFIX}{anim_index}", exc)
         return None
 
 def expected_sheet_png_path(video_path):
@@ -1173,53 +1323,10 @@ def expected_centerlongest_webp_path(folder, longest_video_path):
     scr_dir = os.path.join(os.path.dirname(longest_video_path), "scr")
     return os.path.join(scr_dir, f"centerlongest_{folder_tag}{_anim_ext()}")
 
-def _create_middle_avif(video_path, cfg, out_path, start, clip_seconds, out_fps, vf, w, h):
-    """Decode the clip to raw frames with FFmpeg, then encode animated AVIF with Pillow."""
-    cmd = [
-        FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-        "-ss", str(float(start)),
-        "-i", video_path,
-        "-t", str(float(clip_seconds)),
-        "-vf", f"{vf},fps={int(out_fps)}",
-        "-an", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
-    ]
-    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
-    if p.returncode != 0:
-        return None
-
-    size = int(w) * int(h) * 3
-    raw = p.stdout
-    frames = [Image.frombytes("RGB", (int(w), int(h)), raw[i:i + size]) for i in range(0, len(raw) - size + 1, size)]
-    del raw
-    if len(frames) < 2:
-        return None
-
-    if FOOTER_HEIGHT > 0 and (FOOTER_TEXT or "").strip():
-        frames = [add_footer_to_image(f.convert("RGBA")).convert("RGB") for f in frames]
-
-    q_start, q_min = _animation_quality_range(cfg)
-
-    def encode(quality):
-        if STOP_EVENT.is_set():
-            raise RuntimeError("stopped")
-        return _encode_animation_bytes(frames, out_fps, quality, cfg)
-
-    data = _fit_webp_quality(encode, int(MAX_WEBP_BYTES), q_start, q_min)
-    _write_bytes_atomic(out_path, data)
-    return out_path
-
 def create_middle_animated_webp(video_path, cfg, out_name, clip_seconds=5.0, out_fps=12, skip_existing=False):
+    """Middle-of-video clip (centerlongest). One FFmpeg decode, then the same in-memory quality search as the sheets."""
     try:
-        info = get_video_info(video_path)
-        duration = float(info.get("duration") or 0.0) or 4.0
-
-        clip_seconds = max(1.0, float(clip_seconds or 5.0))
         out_fps = max(4, int(out_fps or 12))
-
-        mid = duration / 2.0
-        start = max(0.0, mid - (clip_seconds / 2.0))
-
-        target_w, target_h = int(PROXY_SAFE_CENTER_W), int(PROXY_SAFE_CENTER_H)
 
         scr_dir = os.path.join(os.path.dirname(video_path), "scr")
         os.makedirs(scr_dir, exist_ok=True)
@@ -1228,58 +1335,56 @@ def create_middle_animated_webp(video_path, cfg, out_name, clip_seconds=5.0, out
         if skip_existing and os.path.isfile(out_path):
             if out_path.lower().endswith(".webp"):
                 q_existing = int(cfg.get("WEBP_QUALITY", 80) or 80)
-                add_footer_to_existing_webp(out_path, quality=q_existing, duration_ms=int(1000 / out_fps), method=cfg.get("WEBP_METHOD"))
+                add_footer_to_existing_webp(out_path, quality=q_existing, duration_ms=round(1000 / out_fps), method=cfg.get("WEBP_METHOD"))
             return out_path
 
-        vf = (
-            f"scale=w={target_w}:h={target_h}:force_original_aspect_ratio=decrease,"
-            f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2"
-        )
+        info = get_video_info(video_path)
+        duration = float(info.get("duration") or 0.0) or 4.0
 
-        if ANIM_FORMAT == "avif":
-            return _create_middle_avif(video_path, cfg, out_path, start, clip_seconds, out_fps, vf, target_w, target_h)
+        clip_seconds = max(1.0, float(clip_seconds or 5.0))
+        start = max(0.0, duration / 2.0 - (clip_seconds / 2.0))
+        target_w, target_h = int(PROXY_SAFE_CENTER_W), int(PROXY_SAFE_CENTER_H)
 
-        part_path = out_path + ".part.webp"
-        q_start, q_min = _animation_quality_range(cfg)
+        count = max(2, int(round(clip_seconds * out_fps)))
+        with ANIM_BUILD_SEMAPHORE:
+            frames = _decode_clip_frames(video_path, start, clip_seconds, count, target_w, target_h)
+            if len(frames) < 2:
+                raise RuntimeError("could not decode the clip")
 
-        def encode(quality):
-            if STOP_EVENT.is_set():
-                raise RuntimeError("stopped")
-            cmd = [
-                FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-                "-ss", str(float(start)),
-                "-i", video_path,
-                "-t", str(float(clip_seconds)),
-                "-vf", vf,
-                "-r", str(int(out_fps)),
-                "-an",
-                "-loop", "0",
-                "-quality", str(int(quality)),
-                "-method", str(int(cfg.get("WEBP_METHOD", PROXY_SAFE_WEBP_METHOD))),
-                part_path
-            ]
-            p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
-            if p.returncode != 0:
-                raise RuntimeError("ffmpeg failed")
-            add_footer_to_existing_webp(part_path, quality=int(quality), duration_ms=int(1000 / out_fps), method=cfg.get("WEBP_METHOD"))
-            with open(part_path, "rb") as fh:
-                return fh.read()
+            if FOOTER_HEIGHT > 0 and (FOOTER_TEXT or "").strip():
+                for i in range(len(frames)):
+                    frames[i] = add_footer_to_image(frames[i].convert("RGBA")).convert("RGB")
 
-        try:
+            q_start, q_min = _animation_quality_range(cfg)
+
+            def encode(quality):
+                if STOP_EVENT.is_set():
+                    raise RuntimeError("stopped")
+                return _encode_animation_bytes(frames, out_fps, quality, cfg)
+
             data = _fit_webp_quality(encode, int(MAX_WEBP_BYTES), q_start, q_min)
-        finally:
-            try:
-                os.remove(part_path)
-            except OSError:
-                pass
-        _write_bytes_atomic(out_path, data)
+            _write_bytes_atomic(out_path, data)
 
         return out_path
-    except Exception:
+    except Exception as exc:
+        _report_failure("centerlongest clip", exc)
         return None
 
 def create_single_frame_png(video_path, cfg, skip_existing=False):
     try:
+        scr_dir = os.path.join(os.path.dirname(video_path), "scr")
+        out_path = os.path.join(scr_dir, "screen.png")
+
+        if skip_existing and os.path.isfile(out_path):
+            try:
+                with Image.open(out_path) as existing_img:
+                    if not image_has_footer(existing_img):
+                        stamped = add_footer_to_image(existing_img)
+                        stamped.save(out_path, format="PNG", compress_level=int(PNG_COMPRESS_LEVEL))
+            except Exception:
+                pass
+            return out_path
+
         info = get_video_info(video_path)
         duration = float(info.get("duration") or 0.0) or 4.0
         middle_time = duration / 2.0
@@ -1300,24 +1405,12 @@ def create_single_frame_png(video_path, cfg, skip_existing=False):
         if img is None:
             return None
 
-        scr_dir = os.path.join(os.path.dirname(video_path), "scr")
         os.makedirs(scr_dir, exist_ok=True)
-        out_path = os.path.join(scr_dir, "screen.png")
-
-        if skip_existing and os.path.isfile(out_path):
-            try:
-                with Image.open(out_path) as existing_img:
-                    if not image_has_footer(existing_img):
-                        stamped = add_footer_to_image(existing_img)
-                        stamped.save(out_path, format="PNG", compress_level=int(PNG_COMPRESS_LEVEL))
-            except Exception:
-                pass
-            return out_path
-
         img = add_footer_to_image(img)
         img.save(out_path, format="PNG", compress_level=int(PNG_COMPRESS_LEVEL))
         return out_path
-    except Exception:
+    except Exception as exc:
+        _report_failure("screen.png", exc)
         return None
 
 def generate_thumbnail_sheet(video_path, cfg, anim_index=None, skip_existing=False):
@@ -1536,6 +1629,7 @@ class ThumbnailMakerApp:
     def __init__(self):
         self.state = AppState(pending_files=[], stop_processing=False, running=False)
         self.ui_queue: Queue = Queue()
+        set_failure_sink(self.log)
         self.processing_started_at = None
         self.completed_files_count = 0
         self.total_files_count = 0
@@ -2381,6 +2475,8 @@ class ThumbnailMakerApp:
                 if kind == "log":
                     msg = item[1]
                     self.log_text.insert(END, msg + "\n")
+                    if int(self.log_text.index("end-1c").split(".")[0]) > 3000:
+                        self.log_text.delete("1.0", "1001.0")
                     self.log_text.see(END)
 
                 elif kind == "status":

@@ -2076,13 +2076,13 @@ class ThumbnailMakerApp:
         messagebox.showinfo("Logo Saved", "Logo settings saved to this script.")
 
     def _save_logo_config_to_this_script(self, url: str, width: int, height: int, skip_existing: bool):
-        script_path = os.path.abspath(__file__)
+        script_path = os.path.realpath(__file__)
         with open(script_path, "r", encoding="utf-8") as f:
             script_text = f.read()
 
         script_text = re.sub(
             r'^LOGO_URL\s*=\s*.*$',
-            f'LOGO_URL = {url!r}',
+            lambda _match: f'LOGO_URL = {url!r}',  # function replacement: backslashes or group escapes in the URL are not interpreted
             script_text,
             flags=re.MULTILINE,
         )
@@ -2105,8 +2105,21 @@ class ThumbnailMakerApp:
             flags=re.MULTILINE,
         )
 
-        with open(script_path, "w", encoding="utf-8", newline="\n") as f:
-            f.write(script_text)
+        import ast
+        ast.parse(script_text)  # never write back a script that no longer parses
+
+        import tempfile
+        fd, tmp_path = tempfile.mkstemp(prefix=".", suffix=".tmp", dir=os.path.dirname(script_path))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+                f.write(script_text)
+            os.replace(tmp_path, script_path)
+        except BaseException:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def log(self, msg: str):
         self.ui_queue.put(("log", msg))
