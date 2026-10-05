@@ -256,7 +256,16 @@ def load_logo_from_source(source, max_w, max_h):
 def load_logo():
     return load_logo_from_source(LOGO_URL, LOGO_MAX_W_PX, LOGO_MAX_H_PX)
 
-LOGO_IMAGE = load_logo()
+LOGO_IMAGE = None
+LOGO_READY = threading.Event()
+STOP_EVENT = threading.Event()
+
+def _load_default_logo():
+    global LOGO_IMAGE
+    try:
+        LOGO_IMAGE = load_logo()
+    finally:
+        LOGO_READY.set()
 
 def get_banner_height():
     """
@@ -1017,6 +1026,8 @@ def create_animated_sheet_webp(video_path, base_sheet_header_footer_rgba, slots,
 
         frames = []
         for fi in range(frame_count):
+            if STOP_EVENT.is_set():
+                return None
             frame_sheet = base_sheet.copy()
 
             for slot_i in range(5):
@@ -1792,7 +1803,7 @@ class ThumbnailMakerApp:
         settings_actions = ttk.Frame(settings, style="Card.TFrame")
         settings_actions.grid(row=2, column=0, columnspan=6, sticky="ew", pady=(10, 0))
 
-        RoundedButton(
+        self.btn_apply_logo = RoundedButton(
             settings_actions,
             text="Apply Logo",
             command=self.save_logo_settings,
@@ -1807,7 +1818,7 @@ class ThumbnailMakerApp:
             font=("Segoe UI", 9, "bold"),
         ).pack(side="left", padx=(0, 6))
 
-        RoundedButton(
+        self.btn_preview_logo = RoundedButton(
             settings_actions,
             text="Preview",
             command=self.preview_logo,
@@ -2044,7 +2055,13 @@ class ThumbnailMakerApp:
             messagebox.showwarning("Invalid Logo Size", "Logo width and height must be whole numbers.")
             return
 
-        logo = load_logo_from_source(source, max_w, max_h)
+        def work():
+            logo = load_logo_from_source(source, max_w, max_h)
+            self.ui_queue.put(("call", lambda: self._show_logo_preview(logo)))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_logo_preview(self, logo):
         if logo is None:
             messagebox.showwarning(
                 "Logo Preview Failed",
@@ -2108,8 +2125,6 @@ class ThumbnailMakerApp:
         info.pack(padx=12, pady=(0, 12))
 
     def save_logo_settings(self):
-        global LOGO_URL, LOGO_MAX_W_PX, LOGO_MAX_H_PX, LOGO_IMAGE
-
         url = (self.logo_url_var.get() or "").strip()
         try:
             width = int((self.logo_width_var.get() or "").strip())
@@ -2129,10 +2144,25 @@ class ThumbnailMakerApp:
             )
             return
 
+        if self.state.running:
+            messagebox.showwarning("Busy", "Logo settings can't be changed while thumbnails are being generated.")
+            return
+
+        def work():
+            logo = load_logo_from_source(url, width, height)
+            self.ui_queue.put(("call", lambda: self._apply_logo(url, width, height, logo)))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _apply_logo(self, url, width, height, logo):
+        global LOGO_URL, LOGO_MAX_W_PX, LOGO_MAX_H_PX, LOGO_IMAGE
+        if self.state.running:
+            messagebox.showwarning("Busy", "Logo settings can't be changed while thumbnails are being generated.")
+            return
         LOGO_URL = url
         LOGO_MAX_W_PX = width
         LOGO_MAX_H_PX = height
-        LOGO_IMAGE = load_logo()
+        LOGO_IMAGE = logo
 
         banner_h = get_banner_height()
         self.log(f"Logo settings applied for this session: {width} W x {height} H | header height now {banner_h}px")
@@ -2213,6 +2243,12 @@ class ThumbnailMakerApp:
                     completed, total = item[1], item[2]
                     self.update_eta(completed, total)
 
+                elif kind == "call":
+                    try:
+                        item[1]()
+                    except Exception as e:
+                        self.log(f"UI error: {e}")
+
         except Empty:
             pass
         finally:
@@ -2227,6 +2263,8 @@ class ThumbnailMakerApp:
             self.btn_clear.configure(state="disabled")
             self.speed_combo.configure(state="disabled")
             self.skip_existing_toggle.configure(state="disabled")
+            self.btn_apply_logo.configure(state="disabled")
+            self.btn_preview_logo.configure(state="disabled")
             self.btn_stop.configure(state="normal")
         else:
             self.btn_start.configure(state="normal")
@@ -2235,6 +2273,8 @@ class ThumbnailMakerApp:
             self.btn_clear.configure(state="normal")
             self.speed_combo.configure(state="readonly")
             self.skip_existing_toggle.configure(state="normal")
+            self.btn_apply_logo.configure(state="normal")
+            self.btn_preview_logo.configure(state="normal")
             self.btn_stop.configure(state="disabled")
 
     def toggle_skip_existing(self):
@@ -2342,6 +2382,7 @@ class ThumbnailMakerApp:
         if not self.state.running:
             return
         self.state.stop_processing = True
+        STOP_EVENT.set()
         self.set_status("Stopping...")
         self.log("Stop requested. Finishing current tasks...")
 
@@ -2354,6 +2395,7 @@ class ThumbnailMakerApp:
             return
 
         self.state.stop_processing = False
+        STOP_EVENT.clear()
         self.processing_started_at = time.time()
         self.completed_files_count = 0
         self.total_files_count = len(paths)
@@ -2382,7 +2424,9 @@ class ThumbnailMakerApp:
         t.start()
 
     def _background_task(self, paths, cfg, skip_existing=False):
+        LOGO_READY.wait(timeout=20)
         done = 0
+        fatal = False
         total = len(paths)
 
         try:
@@ -2399,6 +2443,7 @@ class ThumbnailMakerApp:
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=cfg["MAX_THREADS"]) as executor:
                     future_map = {}
+                    reported = set()
                     for p in vids_sorted:
                         self.ui_queue.put(("file_status", p, "Working"))
                         future_map[executor.submit(self._process_one, p, cfg, animate_map.get(p), skip_existing)] = p
@@ -2406,7 +2451,10 @@ class ThumbnailMakerApp:
                     for f in concurrent.futures.as_completed(future_map):
                         p = future_map[f]
                         if self.state.stop_processing:
+                            for pending in future_map:
+                                pending.cancel()
                             break
+                        reported.add(p)
                         try:
                             ok, msg = f.result()
                             self.log(msg)
@@ -2418,6 +2466,11 @@ class ThumbnailMakerApp:
                         done += 1
                         self.set_progress(done, total)
                         self.ui_queue.put(("eta_update", done, total))
+
+                if self.state.stop_processing:
+                    for p in vids_sorted:
+                        if p not in reported:
+                            self.ui_queue.put(("file_status", p, "Stopped"))
 
                 if not self.state.stop_processing:
                     longest_in_folder = find_longest_video(vids_sorted)
@@ -2462,15 +2515,13 @@ class ThumbnailMakerApp:
                 self.log("\nProcessing complete!")
 
         except Exception as e:
+            fatal = True
             self.set_status("Error")
             self.log(f"Fatal error: {e}")
         finally:
             self.ui_queue.put(("ui_running", False))
-            if not self.state.stop_processing:
-                try:
-                    self.root.after(0, lambda: messagebox.showinfo("Done", "Processing complete!"))
-                except Exception:
-                    pass
+            if not self.state.stop_processing and not fatal:
+                self.ui_queue.put(("call", lambda: messagebox.showinfo("Done", "Processing complete!")))
 
     def _process_one(self, video_path, cfg, anim_index, skip_existing=False):
         if self.state.stop_processing:
@@ -2512,5 +2563,6 @@ if __name__ == "__main__":
             print("FFmpeg Missing:", e)
         raise SystemExit(1)
 
+    threading.Thread(target=_load_default_logo, daemon=True).start()
     app = ThumbnailMakerApp()
     app.run()

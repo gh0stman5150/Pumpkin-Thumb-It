@@ -287,6 +287,8 @@ class Renderer:
                 frames.save(temporary, format="PNG", compress_level=6)
             self.runner.check()
             os.chmod(temporary, 0o666 & ~UMASK)
+            with open(temporary, "r+b") as written:
+                os.fsync(written.fileno())
             os.replace(temporary, path)
         finally:
             if os.path.exists(temporary):
