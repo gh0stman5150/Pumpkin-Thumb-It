@@ -280,5 +280,53 @@ class GuiPasteGoldenTests(unittest.TestCase):
         self.check({"x": 120, "y": 90, "w": 40, "h": 30, "is_big": False}, (40, 30))
 
 
+@unittest.skipIf(GUI is None, REASON)
+class GuiSettingsTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = os.path.join(self.tmp.name, "sub", "settings.json")
+        patcher = mock.patch.object(GUI, "_settings_path", return_value=self.path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_logo_is_blank_by_default(self):
+        self.assertEqual(GUI.LOGO_URL, "")
+
+    def test_nothing_saved_means_blank_logo(self):
+        with mock.patch.object(GUI, "LOGO_URL", ""):
+            GUI._apply_saved_settings()
+            self.assertEqual(GUI.LOGO_URL, "")
+
+    def test_round_trip_creates_folder_and_remembers_values(self):
+        GUI._save_settings({"logo": "/logos/a.png"})
+        GUI._save_settings({"logo_dir": "/logos"})
+        self.assertEqual(GUI._load_settings(), {"logo": "/logos/a.png", "logo_dir": "/logos"})
+        with mock.patch.object(GUI, "LOGO_URL", ""):
+            GUI._apply_saved_settings()
+            self.assertEqual(GUI.LOGO_URL, "/logos/a.png")
+
+    def test_applying_a_blank_logo_forgets_the_old_one(self):
+        GUI._save_settings({"logo": "https://example.com/logo.png"})
+        GUI._save_settings({"logo": ""})
+        with mock.patch.object(GUI, "LOGO_URL", "x"):
+            GUI._apply_saved_settings()
+            self.assertEqual(GUI.LOGO_URL, "")
+
+    def test_corrupt_or_wrong_typed_files_are_ignored(self):
+        os.makedirs(os.path.dirname(self.path))
+        for content in ("not json", "[1, 2]", '{"logo": 5, "logo_dir": ["x"], "other": "y"}'):
+            Path(self.path).write_text(content, encoding="utf-8")
+            self.assertEqual(GUI._load_settings(), {})
+
+    def test_unknown_keys_are_not_saved(self):
+        GUI._save_settings({"logo": "a", "evil": "b"})
+        self.assertEqual(GUI._load_settings(), {"logo": "a"})
+
+    def test_unwritable_location_does_not_raise(self):
+        with mock.patch.object(GUI, "_write_bytes_atomic", side_effect=OSError("read-only")):
+            GUI._save_settings({"logo": "a"})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -42,7 +42,7 @@ If even the floor is over the limit, the CLI raises an error; the GUI keeps the 
 - **Single module**, in order: configuration constants and speed profiles, FFmpeg helpers, layout and drawing, time selection, output builders, `RoundedButton`, then `ThumbnailMakerApp`.
 - **Threading**: `Generate Thumbnails` starts one background thread. It walks the folders one at a time and runs a `ThreadPoolExecutor` of per-video jobs inside each folder, then builds `centerlongest` and `screen.png` for the folder.
 - **UI updates** go through a `Queue` drained on the Tk thread every 60 ms. Message kinds are log, status, progress, file status, ETA, running state and `call` (run a function on the UI thread).
-- **Run-time settings** (Footer toggle, Animation format) are copied into module globals when a run starts and the controls are locked while it runs. Logo settings are session-only.
+- **Run-time settings** (Footer toggle, Animation format) are copied into module globals when a run starts and the controls are locked while it runs. The last applied logo source and browse folder are remembered in `%APPDATA%/Pumpkin's Thumb It/settings.json`; logo size is session-only.
 - **Stop**: a flag plus a shared `threading.Event` checked between animation frames; pending jobs are cancelled and unfinished files are marked Stopped.
 - **Logo** loads in a background thread at startup; processing waits up to 20 s for it.
 

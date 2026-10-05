@@ -71,7 +71,7 @@ FOOTER_BORDER_PX = 3
 FOOTER_SIDE_MARGIN = 5
 FOOTER_BOTTOM_MARGIN = 0
 
-LOGO_URL = "https://imghost.dev/images/2026/07/05/6da6ca143482.png"
+LOGO_URL = ""  # blank by default; the last logo applied in the app is remembered in the settings file
 LOGO_MAX_W_PX = 420
 LOGO_MAX_H_PX = 120
 
@@ -289,6 +289,38 @@ def load_logo_from_source(source, max_w, max_h):
 
 def load_logo():
     return load_logo_from_source(LOGO_URL, LOGO_MAX_W_PX, LOGO_MAX_H_PX)
+
+SETTINGS_KEYS = ("logo", "logo_dir")
+
+def _settings_path():
+    base = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), ".config")
+    return os.path.join(base, "Pumpkin's Thumb It", "settings.json")
+
+def _load_settings():
+    """Remembered settings: the last logo source applied and the last folder a logo was chosen from."""
+    try:
+        with open(_settings_path(), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in data.items() if k in SETTINGS_KEYS and isinstance(v, str)}
+
+def _save_settings(updates):
+    settings = _load_settings()
+    settings.update({k: v for k, v in updates.items() if k in SETTINGS_KEYS})
+    try:
+        path = _settings_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        _write_bytes_atomic(path, json.dumps(settings, indent=2).encode("utf-8"))
+    except OSError:
+        pass
+
+def _apply_saved_settings():
+    """Start with the remembered logo (blank when none has been saved)."""
+    global LOGO_URL
+    LOGO_URL = _load_settings().get("logo", LOGO_URL).strip()
 
 LOGO_IMAGE = None
 LOGO_READY = threading.Event()
@@ -2288,9 +2320,26 @@ class ThumbnailMakerApp:
             style="StatusBar.TLabel"
         ).grid(row=0, column=4, sticky="e")
 
+    def _logo_dialog_dir(self):
+        """Where the logo file dialog opens: the last folder used, else the folder of the current entry."""
+        remembered = _load_settings().get("logo_dir", "")
+        if remembered and os.path.isdir(remembered):
+            return remembered
+        current = os.path.expanduser((self.logo_url_var.get() or "").strip().strip('"'))
+        if current and not re.match(r"^https?://", current, flags=re.IGNORECASE):
+            folder = os.path.dirname(current)
+            if folder and os.path.isdir(folder):
+                return folder
+        return ""
+
     def browse_local_logo(self):
+        options = {}
+        start_dir = self._logo_dialog_dir()
+        if start_dir:
+            options["initialdir"] = start_dir
         path = filedialog.askopenfilename(
             title="Choose logo image",
+            **options,
             filetypes=[
                 ("Image files", "*.png *.jpg *.jpeg *.webp"),
                 ("PNG", "*.png"),
@@ -2301,6 +2350,7 @@ class ThumbnailMakerApp:
         )
         if path:
             self.logo_url_var.set(path)
+            _save_settings({"logo_dir": os.path.dirname(path)})
 
     def preview_logo(self):
         source = (self.logo_url_var.get() or "").strip()
@@ -2419,10 +2469,11 @@ class ThumbnailMakerApp:
         LOGO_MAX_W_PX = width
         LOGO_MAX_H_PX = height
         LOGO_IMAGE = logo
+        _save_settings({"logo": url})
 
         banner_h = get_banner_height()
-        self.log(f"Logo settings applied for this session: {width} W x {height} H | header height now {banner_h}px")
-        messagebox.showinfo("Logo Applied", "Logo settings applied for this session only.")
+        self.log(f"Logo applied: {width} W x {height} H | header height now {banner_h}px (source remembered for next time)")
+        messagebox.showinfo("Logo Applied", "Logo applied. The logo file or URL is remembered for next time; the size is for this session.")
 
     def log(self, msg: str):
         self.ui_queue.put(("log", msg))
@@ -2870,6 +2921,7 @@ if __name__ == "__main__":
             print("FFmpeg Missing:", e)
         raise SystemExit(1)
 
+    _apply_saved_settings()
     threading.Thread(target=_load_default_logo, daemon=True).start()
     app = ThumbnailMakerApp()
     app.run()

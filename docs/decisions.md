@@ -10,9 +10,9 @@ The GUI is a single script with OpenCV, NumPy and Tkinter; the Linux CLI is a se
 
 The README says v5 is kept for its orange theme and old UI. It is no longer maintained: its in-place self-rewriting logo save (below) and other pre-5.2 behaviour remain.
 
-## Logo settings are session-only
+## Logo is blank by default and remembered in a settings file
 
-v5 saved logo changes by rewriting its own source file with regular expressions: non-atomic, fails on read-only or synced folders, and leaves the script different from git. 5.1 removed this; logo settings now last until the app closes. The CLI takes the logo on the command line each run.
+v5 saved logo changes by rewriting its own source file with regular expressions: non-atomic, fails on read-only or synced folders, and leaves the script different from git. 5.1 removed this and made logo settings session-only. 5.2 starts with a blank logo (the old default was a third-party image URL) and remembers only the last logo source and the last browsed folder, in a small JSON file under `%APPDATA%` written atomically; unknown keys and wrongly typed values are ignored. Logo size stays per session. The CLI takes the logo on the command line each run.
 
 ## CLI defaults to no logo
 

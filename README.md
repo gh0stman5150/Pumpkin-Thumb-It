@@ -288,9 +288,9 @@ The preview shows:
 - The current logo size
 - The calculated header height
 
-Click **Apply Logo** to use the current logo settings for the open app session.
+Click **Apply Logo** to use the current logo. The logo field starts blank, and the app remembers the last logo file or URL you applied and the last folder you browsed, so the next launch starts with that logo and **Browse** opens in that folder. Apply a blank logo to forget it. The logo width and height are for the open session only.
 
-The app does not create or save a separate settings file.
+These two values are stored in `settings.json` under `%APPDATA%/Pumpkin's Thumb It/` (or `~/.config/Pumpkin's Thumb It/` when `APPDATA` is not set). Delete that file to reset them.
 
 ---
 
@@ -588,7 +588,7 @@ FFMPEG  = r"C:\ffmpeg\bin\ffmpeg.exe"
 
 SUPPORTED_EXTENSIONS = (".mp4", ".m4v", ".mkv", ".mov", ".avi", ".wmv")
 
-LOGO_URL = "https://your-logo-url.png"
+LOGO_URL = ""
 LOGO_MAX_W_PX = 420
 LOGO_MAX_H_PX = 120
 
@@ -624,7 +624,7 @@ PNG_COMPRESS_LEVEL = 6
 - Existing outputs can be skipped using the Skip Existing toggle.
 - WMV files use FFmpeg extraction to avoid missing-frame issues.
 - Local logos and remote logo URLs are both supported.
-- Logo changes apply to the current app session.
+- The last applied logo and the last logo folder are remembered between launches; logo size changes apply to the current session.
 - The thumbnail sheet header grows automatically if the selected logo is taller than the default header.
 - All outputs are designed to be useful for torrent upload descriptions, gallery previews, and media packs.
 
