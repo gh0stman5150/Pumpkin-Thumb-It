@@ -4,7 +4,7 @@
 
 1. Run `python "Pumpkin’s Thumb It 5.2.py"`.
 2. Add videos with **Add Videos**, **Add Video Folder** or drag and drop. Each of these replaces the current list.
-3. Choose **Speed** (Normal, Fast, Fastest) and **Animation** (WebP or AVIF).
+3. Choose **Quality** (High, Medium or Low; High is slowest, Low is fastest) and **Animation** (WebP or AVIF).
 4. Optional, under **Sheet Settings**:
    - **Logo**: URL or local file, maximum width and height. **Preview** shows a mock header; **Apply Logo** applies it. The field starts blank; the last applied logo and the last folder you browsed are remembered for the next launch (apply a blank logo to forget it). Width and height are for this session only.
    - **Skip Existing**: ON skips outputs already in `scr/`; OFF rebuilds them.

@@ -24,7 +24,7 @@ Outputs are encoded to a temp file, fsynced and `os.replace`d. A failure keeps t
 
 ## Highest quality under the size cap
 
-The old loop reduced quality in steps of 10 until a file fit, so a file just over the limit could drop far below it. Both implementations now search for the highest quality that fits. WebP is searched between the profile quality (capped at 75) and 25; AVIF between 90 and 20. In a synthetic test, WebP method 6 was about 18% smaller than method 3 at the same quality, so the speed profile now selects the method.
+The old loop reduced quality in steps of 10 until a file fit, so a file just over the limit could drop far below it. Both implementations now search for the highest quality that fits. WebP is searched between the profile quality (85/75/70) and 25; AVIF between 90 and 20. In a synthetic test, WebP method 6 was about 18% smaller than method 3 at the same quality, so the speed profile now selects the method.
 
 ## WebP by default, AVIF opt-in
 
@@ -32,7 +32,7 @@ AVIF can look better at the same size, but the repo does not show whether upload
 
 ## Proxy-safe mode
 
-`PROXY_SAFE_MODE = True` was added in v4.2 with no explanation in the repo. Today it caps WebP quality at 75 and sizes the longest-video clip at 960×540 (instead of 100 and 1280×720). The likely intent is keeping files small and cheap for an upload or image-host pipeline, but that is an inference. It is a hardcoded flag with no UI control and does not apply to AVIF.
+`PROXY_SAFE_MODE = True` was added in v4.2 with no explanation in the repo. Today it sizes the longest-video clip at 960×540 (instead of 1280×720); its WebP quality cap of 75 was raised to 100 so the profile quality applies. The likely intent is keeping files small and cheap for an upload or image-host pipeline, but that is an inference. It is a hardcoded flag with no UI control and does not apply to AVIF.
 
 ## Reproducible frame choice
 

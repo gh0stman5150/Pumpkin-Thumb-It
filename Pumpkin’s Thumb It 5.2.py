@@ -113,7 +113,7 @@ if PROXY_SAFE_MODE:
     PROXY_SAFE_CENTER_W = 960
     PROXY_SAFE_CENTER_H = 540
     PROXY_SAFE_WEBP_METHOD = 3
-    PROXY_SAFE_WEBP_QUALITY_CAP = 75
+    PROXY_SAFE_WEBP_QUALITY_CAP = 100
 else:
     PROXY_SAFE_CENTER_W = 1280
     PROXY_SAFE_CENTER_H = 720
@@ -159,6 +159,14 @@ SPEED_PROFILES = {
         "MAX_THREADS": max(4, os.cpu_count() or 8),
     },
 }
+
+# Quality labels shown in the GUI, mapped to the profile keys above.
+QUALITY_LABELS = {
+    "High (slowest)": "Normal",
+    "Medium (balanced)": "Fast",
+    "Low (fastest)": "Fastest",
+}
+DEFAULT_QUALITY_LABEL = "Medium (balanced)"
 
 def _resolve_ff_tools():
     global FFMPEG, FFPROBE
@@ -1999,14 +2007,14 @@ class ThumbnailMakerApp:
         output_row = ttk.Frame(settings, style="Card.TFrame")
         output_row.grid(row=1, column=1, columnspan=2, sticky="w", pady=(0, 10))
 
-        ttk.Label(output_row, text="Speed", style="PanelSub.TLabel").pack(side="left")
-        self.speed_var = StringVar(value="Fast")
+        ttk.Label(output_row, text="Quality", style="PanelSub.TLabel").pack(side="left")
+        self.speed_var = StringVar(value=DEFAULT_QUALITY_LABEL)
         self.speed_combo = ttk.Combobox(
             output_row,
             textvariable=self.speed_var,
-            values=["Normal", "Fast", "Fastest"],
+            values=list(QUALITY_LABELS),
             state="readonly",
-            width=10
+            width=17
         )
         self.speed_combo.pack(side="left", padx=(8, 18))
 
@@ -2766,8 +2774,9 @@ class ThumbnailMakerApp:
         self.completed_files_count = 0
         self.total_files_count = len(paths)
         self.eta_var.set("ETA: calculating...")
-        profile_name = self.speed_var.get()
-        cfg = dict(SPEED_PROFILES.get(profile_name, SPEED_PROFILES["Fast"]))
+        quality_label = self.speed_var.get()
+        profile_name = QUALITY_LABELS.get(quality_label, QUALITY_LABELS[DEFAULT_QUALITY_LABEL])
+        cfg = dict(SPEED_PROFILES[profile_name])
 
         if AFFINITY_LOGICAL:
             cfg["MAX_THREADS"] = max(1, min(cfg["MAX_THREADS"], AFFINITY_LOGICAL))
@@ -2783,7 +2792,7 @@ class ThumbnailMakerApp:
         for p in paths:
             self.ui_queue.put(("file_status", p, "Queued"))
 
-        self.log(f"Start: {len(paths)} files  |  Speed: {profile_name}  |  Proxy-safe: {'ON' if PROXY_SAFE_MODE else 'OFF'}  |  Skip existing: {'ON' if self.skip_existing_var.get() else 'OFF'}  |  Footer: {'ON' if footer_on else 'OFF'}  |  Animation: {ANIM_FORMAT.upper()}")
+        self.log(f"Start: {len(paths)} files  |  Quality: {quality_label}  |  Proxy-safe: {'ON' if PROXY_SAFE_MODE else 'OFF'}  |  Skip existing: {'ON' if self.skip_existing_var.get() else 'OFF'}  |  Footer: {'ON' if footer_on else 'OFF'}  |  Animation: {ANIM_FORMAT.upper()}")
         self.log("WMV/VC-1: using FFmpeg extraction to prevent NO FRAME.")
 
         t = threading.Thread(target=self._background_task, args=(paths, cfg, bool(self.skip_existing_var.get())), daemon=True)

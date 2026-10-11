@@ -361,7 +361,7 @@ class Renderer:
                     method = {"normal": 4, "fast": 6, "fastest": 8}[self.settings.speed]  # AVIF speed
                 else:
                     quality, method = {"normal": (85, 6), "fast": (75, 3), "fastest": (70, 1)}[self.settings.speed]
-                    quality, floor = min(quality, 75), 25  # 5.1 proxy-safe quality cap.
+                    floor = 25  # profile quality is the search start; no cap.
                 data = self.fit_animation(frames, quality, method, path.name, floor)
                 with open(temporary, "wb") as handle:
                     handle.write(data)

@@ -32,7 +32,7 @@ They share no code. The CLI is a port of the 5.x layout built on Pillow and FFmp
 
 | Format | Start | Floor | Speed setting |
 | --- | --- | --- | --- |
-| WebP | profile quality (85/75/70), capped at 75 | 25 | encoder method 6/3/1 by profile |
+| WebP | profile quality (85/75/70) | 25 | encoder method 6/3/1 by profile |
 | AVIF | 90 | 20 | encoder speed 4/6/8 by profile |
 
 If even the floor is over the limit, the CLI raises an error; the GUI keeps the floor-quality file.

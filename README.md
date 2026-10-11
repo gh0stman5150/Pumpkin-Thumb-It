@@ -225,7 +225,7 @@ The app includes:
 - Clear file list button
 - Generate Thumbnails button
 - Stop After Current Task button
-- Speed selector
+- Quality selector (High, Medium, Low)
 - File queue table
 - Processing status column
 - Colored status rows
@@ -357,17 +357,17 @@ The ETA becomes more accurate as more files complete.
 
 ---
 
-# Speed Modes
+# Quality Modes
 
-The app has three speed profiles.
+The **Quality** dropdown trades output quality against processing time. The CLI exposes the same profiles as `--speed normal|fast|fastest`.
 
-| Mode | Description | WebP encoder method | AVIF encoder speed |
+| Quality | Description | WebP encoder method | AVIF encoder speed |
 | --- | --- | --- | --- |
-| Normal | Best compression and visual quality, slowest | 6 | 4 |
-| Fast | Balanced speed and quality | 3 | 6 |
-| Fastest | Quickest processing | 1 | 8 |
+| High (slowest) | Best compression and visual quality | 6 | 4 |
+| Medium (balanced) | Balanced speed and quality (default) | 3 | 6 |
+| Low (fastest) | Quickest processing | 1 | 8 |
 
-The profile also sets the starting WebP quality (85, 75 and 70) and the number of videos processed in parallel. WebP quality is capped at 75 by proxy-safe mode, so Normal and Fast start at the same quality. Each animation is then searched for the highest quality that fits under the size limit (see **WEBP Output Is Too Large**).
+The profile also sets the starting WebP quality (85, 75 and 70) and the number of videos processed in parallel. Proxy-safe mode no longer caps WebP quality, so High, Medium and Low start at 85, 75 and 70. Each animation is then searched for the highest quality that fits under the size limit (see **WEBP Output Is Too Large**).
 
 ---
 
@@ -381,7 +381,7 @@ The app includes several performance-focused features:
 - OpenCV optimisations
 - FFmpeg fallback extraction
 - WMV fallback handling
-- Proxy-safe WEBP settings (quality capped at 75, 960 x 540 longest-video clip)
+- Proxy-safe WEBP settings (960 x 540 longest-video clip)
 - WEBP and AVIF file size limiting
 - Quality search that keeps the highest quality that fits under the size limit
 - Faster animated WEBP clip extraction
@@ -511,7 +511,7 @@ If your script has a different filename, run that file instead.
 
 1. Open the app.
 2. Add videos using **Add Videos**, **Add Video Folder**, or drag and drop.
-3. Select speed mode: **Normal**, **Fast**, or **Fastest**. Optionally set **Animation** to **AVIF** for `.avif` animated outputs instead of WebP (needs Pillow 11.3+ with AVIF support; confirm your destination accepts animated AVIF).
+3. Select quality: **High** (slowest), **Medium** (balanced) or **Low** (fastest). Optionally set **Animation** to **AVIF** for `.avif` animated outputs instead of WebP (needs Pillow 11.3+ with AVIF support; confirm your destination accepts animated AVIF).
 4. Optional: change the logo, preview the logo, or browse for a local logo.
 5. Choose whether **Skip Existing** should be ON or OFF.
 6. Click **Generate Thumbnails**.
@@ -673,7 +673,7 @@ You can increase that value if your site allows larger files. If even the floor 
 
 Try:
 
-- Using **Fastest** mode.
+- Using **Low (fastest)** quality.
 - Reducing the number of files processed at once.
 - Lowering animated WEBP duration or FPS.
 - Closing other heavy programs while processing.
